@@ -7,6 +7,19 @@ from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
 from supabase import create_client, Client
 
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware #
+
+app = FastAPI()
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"], #
+    allow_credentials=True, #
+    allow_methods=["*"], #
+    allow_headers=["*"], #
+)
+
 # Explicitly load the .env file right next to main.py
 env_path = Path(__file__).parent / ".env"
 load_dotenv(dotenv_path=env_path, override=True)
