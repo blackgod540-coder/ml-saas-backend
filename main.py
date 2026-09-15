@@ -182,7 +182,7 @@ async def upload_and_train(
     print(f"\n-> [TRAIN ROUTE] Starting upload and train for user_id: {user_id}")
     
     # --- CREDIT GUARD CHECK ---
-    profile_response = supabase.table("profiles").select("*").eq("user_id", user_id).execute()
+    profile_response = supabase.table("profiles").select("*").eq("id", user_id).execute()
     
     if not profile_response.data:
         supabase.table("profiles").insert({"user_id": user_id, "credits": 5, "plan_type": "free"}).execute()
