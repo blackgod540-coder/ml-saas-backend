@@ -142,12 +142,15 @@
 
     // 1. Session Management & Auth Listeners
     window.addEventListener('DOMContentLoaded', async () => {
-        const { data: { session } } = await supabaseClient.auth.getSession();
-        if (session) {
-            currentUser = session.user;
-            updateUserUI();
-            await fetchUserCredits();
-        }
+       // In index.html inside window.addEventListener('DOMContentLoaded')
+       const urlParams = new URLSearchParams(window.location.search);
+if (urlParams.has('trxref') || urlParams.has('reference')) {
+    window.history.replaceState(null, '', window.location.pathname);
+    // Force fresh profile fetch
+    setTimeout(async () => {
+        await fetchUserCredits();
+    }, 1500);
+}
 
         supabaseClient.auth.onAuthStateChange(async (event, session) => {
             currentUser = session ? session.user : null;
@@ -161,8 +164,8 @@
         });
 
         // Check if returning from Paystack checkout redirect
-        const urlParams = new URLSearchParams(window.location.search);
-        if (urlParams.has('trxref') || urlParams.has('reference')) {
+        const checkoutUrlParams = new URLSearchParams(window.location.search);
+        if (checkoutUrlParams.has('trxref') || checkoutUrlParams.has('reference')) {
             // Clear query parameters from URL bar
             window.history.replaceState(null, '', window.location.pathname);
             // Wait 2.5 seconds to ensure backend webhook execution completes
