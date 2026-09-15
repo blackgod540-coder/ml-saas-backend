@@ -11,8 +11,7 @@
 <body class="bg-gray-100 min-h-screen p-6">
     <div class="max-w-3xl mx-auto space-y-6">
         
-        <!-- Header -->
-   <!-- Header -->
+<!-- Header -->
 <div class="bg-white p-6 rounded-2xl shadow-sm border border-gray-200 flex justify-between items-center">
     <div>
         <h1 class="text-2xl font-bold text-gray-900">No-Code ML Dashboard</h1>
@@ -142,36 +141,37 @@
     let isSignUpMode = false;
 
     // 1. Session Management & Auth Listeners
-  window.addEventListener('DOMContentLoaded', async () => {
-    const { data: { session } } = await supabaseClient.auth.getSession();
-    if (session) {
-        currentUser = session.user;
-        updateUserUI();
-        await fetchUserCredits();
-    }
-
-    supabaseClient.auth.onAuthStateChange(async (event, session) => {
-        currentUser = session ? session.user : null;
-        updateUserUI();
-        if (currentUser) {
+    window.addEventListener('DOMContentLoaded', async () => {
+        const { data: { session } } = await supabaseClient.auth.getSession();
+        if (session) {
+            currentUser = session.user;
+            updateUserUI();
             await fetchUserCredits();
-            if (window.location.hash.includes('access_token')) {
-                window.history.replaceState(null, '', window.location.pathname);
+        }
+
+        supabaseClient.auth.onAuthStateChange(async (event, session) => {
+            currentUser = session ? session.user : null;
+            updateUserUI();
+            if (currentUser) {
+                await fetchUserCredits();
+                if (window.location.hash.includes('access_token')) {
+                    window.history.replaceState(null, '', window.location.pathname);
+                }
             }
+        });
+
+        // Check if returning from Paystack checkout redirect
+        const urlParams = new URLSearchParams(window.location.search);
+        if (urlParams.has('trxref') || urlParams.has('reference')) {
+            // Clear query parameters from URL bar
+            window.history.replaceState(null, '', window.location.pathname);
+            // Wait 2.5 seconds to ensure backend webhook execution completes
+            setTimeout(async () => {
+                await fetchUserCredits();
+            }, 2500);
         }
     });
 
-    // Check if returning from Paystack checkout redirect
-    const urlParams = new URLSearchParams(window.location.search);
-    if (urlParams.has('trxref') || urlParams.has('reference')) {
-        // Clear query parameters from URL bar
-        window.history.replaceState(null, '', window.location.pathname);
-        // Wait 2.5 seconds to ensure backend webhook execution completes
-        setTimeout(async () => {
-            await fetchUserCredits();
-        }, 2500);
-    }
-});
     // 2. Auth Modal & UI Helpers
     function toggleAuthModal() {
         const modal = document.getElementById('authModal');
@@ -243,7 +243,7 @@
                 .from('profiles')
                 .select('credits')
                 .eq('id', currentUser.id)
-                .single();
+                .maybeSingle(); // Changed from single() to avoid 406 missing row errors
 
             if (error) throw error;
             const creditCountElem = document.getElementById('creditCount');
@@ -269,10 +269,15 @@
             btn.disabled = true;
             btn.classList.add('opacity-50');
 
+            // Fetch the user's active session token to authenticate the backend request
+            const { data: { session } } = await supabaseClient.auth.getSession();
+            const token = session ? session.access_token : '';
+
             const res = await fetch(`${API_BASE_URL}/pay/initialize`, {
                 method: 'POST',
                 headers: { 
-                    'Content-Type': 'application/json' 
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${token}` // ADDED: Secures the API call
                 },
                 body: JSON.stringify({
                     email: currentUser.email,
@@ -386,11 +391,16 @@
         const formData = new FormData();
         formData.append('file', fileInput);
 
-        // Passed user_id in the query string so the backend can verify credits
+        // Fetch the user's active session token
+        const { data: { session } } = await supabaseClient.auth.getSession();
+        const token = session ? session.access_token : '';
+
+        // Added Authorization Header so backend bypasses RLS and verifies correctly
         const res = await fetch(`${API_BASE_URL}/upload-and-train/?target_column=${targetCol}&user_id=${currentUser.id}`, {
             method: 'POST',
             headers: {
-                'X-API-Key': API_KEY
+                'X-API-Key': API_KEY,
+                'Authorization': `Bearer ${token}` // ADDED: Backend verification
             },
             body: formData
         });
@@ -482,9 +492,16 @@
                 inputData[feat] = val;
             });
 
+            // Fetch token for prediction if your endpoint requires it
+            const { data: { session } } = await supabaseClient.auth.getSession();
+            const token = session ? session.access_token : '';
+
             const res = await fetch(`${API_BASE_URL}/predict/${currentModelId}`, {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
+                headers: { 
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${token}`
+                },
                 body: JSON.stringify({ input_data: inputData })
             });
 

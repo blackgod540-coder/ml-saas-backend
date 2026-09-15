@@ -19,7 +19,7 @@ env_path = Path(__file__).parent / ".env"
 load_dotenv(dotenv_path=env_path, override=True)
 
 # Cleaned base URL (stripped /rest/v1/ so Supabase SDK routes correctly)
-RAW_SUPABASE_URL = os.getenv("SUPABASE_URL", "https://vrirjtjhmpgydrhqpcib.supabase.co/rest/v1/")
+RAW_SUPABASE_URL = os.getenv("SUPABASE_URL", "https://vrirjtjhmpgydrhqpcib.supabase.co")
 SUPABASE_URL = RAW_SUPABASE_URL.split("/rest/v1")[0].rstrip("/")
 
 SUPABASE_SERVICE_ROLE_KEY = os.getenv(
@@ -34,6 +34,7 @@ PAYSTACK_SECRET_KEY = os.getenv(
 
 # Initialize Supabase client
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
+supabase_admin: Client = create_client(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
 
 app = FastAPI(
     title="No-Code ML Platform API",
@@ -151,23 +152,71 @@ async def paystack_webhook(request: Request, x_paystack_signature: str = Header(
 
         if user_id:
             payment_type = metadata.get("payment_type")
+            
+            # Use execute() instead of single() to prevent exceptions when user has no profile
+            profile_res = supabase.table("profiles").select("*").eq("id", user_id).execute()
+            profile_exists = len(profile_res.data) > 0
+            current_credits = profile_res.data[0].get("credits", 0) if profile_exists else 0
 
             if payment_type == "credit_pack":
                 credits_to_add = metadata.get("credits_to_add", 50)
-                profile = supabase.table("profiles").select("credits").eq("user_id", user_id).single().execute()
-                current_credits = profile.data.get("credits", 0) if profile.data else 0
+                new_credits = current_credits + credits_to_add
                 
-                supabase.table("profiles").update({
-                    "credits": current_credits + credits_to_add,
-                    "plan_type": "credit_pack"
-                }).eq("user_id", user_id).execute()
+                if profile_exists:
+                    supabase.table("profiles").update({
+                        "credits": new_credits,
+                        "plan_type": "credit_pack"
+                    }).eq("id", user_id).execute()
+                else:
+                    supabase.table("profiles").insert({
+                        "id": user_id, 
+                        "credits": new_credits,
+                        "plan_type": "credit_pack"
+                    }).execute()
 
             elif payment_type == "pro_subscription":
-                supabase.table("profiles").update({
-                    "plan_type": "pro_subscriber"
-                }).eq("user_id", user_id).execute()
+                if profile_exists:
+                    supabase.table("profiles").update({
+                        "plan_type": "pro_subscriber"
+                    }).eq("id", user_id).execute()
+                else:
+                    supabase.table("profiles").insert({
+                        "id": user_id,
+                        "credits": current_credits,
+                        "plan_type": "pro_subscriber"
+                    }).execute()
 
     return {"status": "success"}
+
+
+@app.post("/train")
+async def train_model(authorization: str = Header(None)):
+    if not authorization or not authorization.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Missing authorization token")
+
+    token = authorization.split(" ")[1]
+    
+    # 1. Verify user identity via Supabase Auth
+    user_response = supabase_admin.auth.get_user(token)
+    if not user_response or not user_response.user:
+        raise HTTPException(status_code=401, detail="Invalid auth token")
+        
+    user_id = user_response.user.id
+
+    # 2. Fetch credits directly using admin client
+    profile = supabase_admin.table("profiles").select("credits").eq("id", user_id).execute()
+    
+    if not profile.data or profile.data[0].get("credits", 0) < 1:
+        raise HTTPException(status_code=400, detail="Insufficient credits. Please purchase a credit pack.")
+
+    current_credits = profile.data[0]["credits"]
+
+    # --- YOUR MACHINE LEARNING TRAINING LOGIC HERE ---
+
+    # 3. Deduct 1 credit after successful training execution
+    supabase_admin.table("profiles").update({"credits": current_credits - 1}).eq("id", user_id).execute()
+
+    return {"status": "success", "remaining_credits": current_credits - 1}
 
 
 # --- 6. CORE ML ROUTE ---
@@ -185,7 +234,8 @@ async def upload_and_train(
     profile_response = supabase.table("profiles").select("*").eq("id", user_id).execute()
     
     if not profile_response.data:
-        supabase.table("profiles").insert({"user_id": user_id, "credits": 5, "plan_type": "free"}).execute()
+        # FIXED: Using 'id' instead of 'user_id' so it matches the select statement
+        supabase.table("profiles").insert({"id": user_id, "credits": 5, "plan_type": "free"}).execute()
         user_profile = {"credits": 5, "plan_type": "free"}
     else:
         user_profile = profile_response.data[0]
