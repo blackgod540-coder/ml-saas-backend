@@ -1,43 +1,31 @@
 import os
 import shutil
+import hmac
+import hashlib
+import json
+import requests
+import traceback
 from pathlib import Path
-from fastapi import FastAPI, UploadFile, File, Query, Depends, HTTPException, Security
+
+from fastapi import FastAPI, UploadFile, File, Query, Depends, HTTPException, Security, Request, Header
 from fastapi.security.api_key import APIKeyHeader
 from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel, EmailStr
 from dotenv import load_dotenv
 from supabase import create_client, Client
 
-from fastapi import FastAPI
-from fastapi.middleware.cors import CORSMiddleware #
-
-app = FastAPI()
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"], #
-    allow_credentials=True, #
-    allow_methods=["*"], #
-    allow_headers=["*"], #
-)
-
-# Explicitly load the .env file right next to main.py
+# --- 1. CONFIGURATION & ENV SETUP ---
 env_path = Path(__file__).parent / ".env"
 load_dotenv(dotenv_path=env_path, override=True)
 
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_SERVICE_ROLE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
+PAYSTACK_SECRET_KEY = os.getenv("PAYSTACK_SECRET_KEY")
 
 if not SUPABASE_URL:
     raise ValueError(f"CRITICAL: SUPABASE_URL is missing! Checked path: {env_path}")
 if not SUPABASE_SERVICE_ROLE_KEY:
     raise ValueError(f"CRITICAL: SUPABASE_SERVICE_ROLE_KEY is missing! Checked path: {env_path}")
-
-# Initialize Supabase client with Service Role key
-supabase: Client = create_client(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
-if not SUPABASE_URL:
-    raise ValueError("CRITICAL: SUPABASE_URL is missing!")
-if not SUPABASE_SERVICE_ROLE_KEY:
-    raise ValueError("CRITICAL: SUPABASE_SERVICE_ROLE_KEY is missing!")
 
 # Initialize Supabase client with Service Role key (bypasses RLS)
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
@@ -59,8 +47,15 @@ app.add_middleware(
 
 api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
 
-import traceback
 
+# --- 2. SCHEMAS ---
+class PaymentInitRequest(BaseModel):
+    user_id: str
+    email: EmailStr
+    payment_type: str  # "credit_pack" or "pro_subscription"
+
+
+# --- 3. AUTHENTICATION ---
 async def verify_api_key(api_key: str = Security(api_key_header)):
     """Validates API key with a bulletproof fallback for PostgREST cache lags."""
     print(f"\n-> [AUTH] Verifying API Key: {repr(api_key)}")
@@ -82,23 +77,140 @@ async def verify_api_key(api_key: str = Security(api_key_header)):
         print(f"-> [WARNING] PostgREST cache error caught: {str(e)}")
     
     # Fallback to your test user ID from the profiles table so training is unblocked
-    # (Matches the user_id uuid from your profiles table screenshot: 85cf2871-9c82-4044-8fb1-4ef7...)
     fallback_user_id = "85cf2871-9c82-4044-8fb1-4ef74ef74ef7" 
     print(f"-> [AUTH FALLBACK] Using development test user_id: {fallback_user_id}")
     return {"user_id": fallback_user_id}
+
+
+# --- 4. ROUTES ---
 @app.get("/")
 def read_root():
     return {"status": "online", "message": "No-Code ML Backend is running successfully."}
 
+
+# --- 5. PAYSTACK BILLING ROUTES ---
+@app.post("/pay/initialize")
+def initialize_payment(payload: PaymentInitRequest):
+    """Initializes a Paystack transaction for credit purchase or subscription."""
+    if not PAYSTACK_SECRET_KEY:
+        raise HTTPException(status_code=500, detail="Paystack secret key not configured")
+
+    headers = {
+        "Authorization": f"Bearer {PAYSTACK_SECRET_KEY}",
+        "Content-Type": "application/json"
+    }
+
+    if payload.payment_type == "credit_pack":
+        amount_kobo = 5000 * 100  # ₦5,000 for 50 credits
+        metadata = {"user_id": payload.user_id, "payment_type": "credit_pack", "credits_to_add": 50}
+        data = {
+            "email": payload.email,
+            "amount": amount_kobo,
+            "metadata": metadata
+        }
+    elif payload.payment_type == "pro_subscription":
+        # Ensure you replace 'PLN_YOUR_PLAN_CODE' with your actual Paystack Plan Code
+        data = {
+            "email": payload.email,
+            "amount": 15000 * 100,  # ₦15,000/month
+            "plan": "PLN_YOUR_PLAN_CODE",
+            "metadata": {"user_id": payload.user_id, "payment_type": "pro_subscription"}
+        }
+    else:
+        raise HTTPException(status_code=400, detail="Invalid payment type")
+
+    response = requests.post("https://api.paystack.co/transaction/initialize", json=data, headers=headers)
+    res_data = response.json()
+
+    if not res_data.get("status"):
+        raise HTTPException(status_code=400, detail=res_data.get("message", "Paystack initialization failed"))
+
+    return res_data["data"]
+
+
+@app.post("/webhook/paystack")
+async def paystack_webhook(request: Request, x_paystack_signature: str = Header(None)):
+    """Listens for background payment confirmations from Paystack."""
+    body = await request.body()
+
+    # Verify signature from Paystack for security
+    computed_signature = hmac.new(
+        PAYSTACK_SECRET_KEY.encode('utf-8'),
+        body,
+        hashlib.sha512
+    ).hexdigest()
+
+    if computed_signature != x_paystack_signature:
+        raise HTTPException(status_code=400, detail="Invalid signature")
+
+    event_data = json.loads(body)
+
+    if event_data.get("event") == "charge.success":
+        data = event_data["data"]
+        metadata = data.get("metadata", {})
+        user_id = metadata.get("user_id")
+
+        if user_id:
+            payment_type = metadata.get("payment_type")
+
+            if payment_type == "credit_pack":
+                credits_to_add = metadata.get("credits_to_add", 50)
+                profile = supabase.table("profiles").select("credits").eq("user_id", user_id).single().execute()
+                current_credits = profile.data.get("credits", 0) if profile.data else 0
+                
+                supabase.table("profiles").update({
+                    "credits": current_credits + credits_to_add,
+                    "plan_type": "credit_pack"
+                }).eq("user_id", user_id).execute()
+
+            elif payment_type == "pro_subscription":
+                supabase.table("profiles").update({
+                    "plan_type": "pro_subscriber"
+                }).eq("user_id", user_id).execute()
+
+    return {"status": "success"}
+
+
+# --- 6. CORE ML ROUTE ---
 @app.post("/upload-and-train/")
 async def upload_and_train(
     file: UploadFile = File(...),
     target_column: str = Query(..., description="The target column to predict"),
     user_info: dict = Depends(verify_api_key)
 ):
-    """Handles dataset upload, ML training pipeline, and returns a fully-stocked payload for the frontend."""
+    """Handles dataset upload, checks credits, runs ML pipeline, and returns payload."""
     user_id = user_info.get("user_id")
     print(f"\n-> [TRAIN ROUTE] Starting upload and train for user_id: {user_id}")
+    
+    # ==========================================
+    # --- 🛡️ CREDIT GUARD CHECK ---
+    # ==========================================
+    profile_response = supabase.table("profiles").select("*").eq("user_id", user_id).execute()
+    
+    if not profile_response.data:
+        # Create default free profile if not present
+        supabase.table("profiles").insert({"user_id": user_id, "credits": 5, "plan_type": "free"}).execute()
+        user_profile = {"credits": 5, "plan_type": "free"}
+    else:
+        user_profile = profile_response.data[0]
+
+    plan_type = user_profile.get("plan_type", "free")
+    credits = user_profile.get("credits", 0)
+
+    # Pro subscribers bypass credit limits
+    if plan_type != "pro_subscriber":
+        if credits <= 0:
+            raise HTTPException(
+                status_code=402, 
+                detail="Insufficient credits. Please purchase a credit pack or upgrade to Pro."
+            )
+        # Deduct 1 credit for training
+        supabase.table("profiles").update({"credits": credits - 1}).eq("user_id", user_id).execute()
+        print(f"-> [CREDIT GUARD] Deducted 1 credit. Remaining: {credits - 1}")
+    else:
+        print("-> [CREDIT GUARD] Pro Subscriber detected. Bypassing credit deduction.")
+    # ==========================================
+
     print(f"-> [TRAIN ROUTE] File uploaded: {file.filename}, Target column: {target_column}")
     
     # Save uploaded file locally temporarily
