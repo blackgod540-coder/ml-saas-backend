@@ -25,7 +25,7 @@
         </div>
 
         <button onclick="buyCredits()" id="buyCreditsBtn" class="bg-indigo-600 text-white font-medium py-2 px-4 rounded-xl hover:bg-indigo-700 transition shadow-sm text-sm">
-            Buy Credits (₦5,000)
+            Buy Credits (50 for ₦5,000)
         </button>
 
         <!-- Auth Button -->
@@ -98,7 +98,7 @@
 
             <div>
                 <h3 class="text-xs font-bold text-gray-400 uppercase tracking-wider mb-3">Performance Metrics</h3>
-                <div id="metricsGrid" class="grid grid-cols-3 gap-4"></div>
+                <div id="metricsGrid" class="grid grid-cols-2 md:grid-cols-4 gap-4"></div>
             </div>
 
             <div class="flex gap-4 pt-2">
@@ -142,15 +142,13 @@
 
     // 1. Session Management & Auth Listeners
     window.addEventListener('DOMContentLoaded', async () => {
-       // In index.html inside window.addEventListener('DOMContentLoaded')
        const urlParams = new URLSearchParams(window.location.search);
-if (urlParams.has('trxref') || urlParams.has('reference')) {
-    window.history.replaceState(null, '', window.location.pathname);
-    // Force fresh profile fetch
-    setTimeout(async () => {
-        await fetchUserCredits();
-    }, 1500);
-}
+       if (urlParams.has('trxref') || urlParams.has('reference')) {
+           window.history.replaceState(null, '', window.location.pathname);
+           setTimeout(async () => {
+               await fetchUserCredits();
+           }, 1500);
+       }
 
         supabaseClient.auth.onAuthStateChange(async (event, session) => {
             currentUser = session ? session.user : null;
@@ -163,12 +161,9 @@ if (urlParams.has('trxref') || urlParams.has('reference')) {
             }
         });
 
-        // Check if returning from Paystack checkout redirect
         const checkoutUrlParams = new URLSearchParams(window.location.search);
         if (checkoutUrlParams.has('trxref') || checkoutUrlParams.has('reference')) {
-            // Clear query parameters from URL bar
             window.history.replaceState(null, '', window.location.pathname);
-            // Wait 2.5 seconds to ensure backend webhook execution completes
             setTimeout(async () => {
                 await fetchUserCredits();
             }, 2500);
@@ -246,7 +241,7 @@ if (urlParams.has('trxref') || urlParams.has('reference')) {
                 .from('profiles')
                 .select('credits')
                 .eq('id', currentUser.id)
-                .maybeSingle(); // Changed from single() to avoid 406 missing row errors
+                .maybeSingle();
 
             if (error) throw error;
             const creditCountElem = document.getElementById('creditCount');
@@ -272,7 +267,6 @@ if (urlParams.has('trxref') || urlParams.has('reference')) {
             btn.disabled = true;
             btn.classList.add('opacity-50');
 
-            // Fetch the user's active session token to authenticate the backend request
             const { data: { session } } = await supabaseClient.auth.getSession();
             const token = session ? session.access_token : '';
 
@@ -280,7 +274,7 @@ if (urlParams.has('trxref') || urlParams.has('reference')) {
                 method: 'POST',
                 headers: { 
                     'Content-Type': 'application/json',
-                    'Authorization': `Bearer ${token}` // ADDED: Secures the API call
+                    'Authorization': `Bearer ${token}`
                 },
                 body: JSON.stringify({
                     email: currentUser.email,
@@ -394,16 +388,14 @@ if (urlParams.has('trxref') || urlParams.has('reference')) {
         const formData = new FormData();
         formData.append('file', fileInput);
 
-        // Fetch the user's active session token
         const { data: { session } } = await supabaseClient.auth.getSession();
         const token = session ? session.access_token : '';
 
-        // Added Authorization Header so backend bypasses RLS and verifies correctly
         const res = await fetch(`${API_BASE_URL}/upload-and-train/?target_column=${targetCol}&user_id=${currentUser.id}`, {
             method: 'POST',
             headers: {
                 'X-API-Key': API_KEY,
-                'Authorization': `Bearer ${token}` // ADDED: Backend verification
+                'Authorization': `Bearer ${token}`
             },
             body: formData
         });
@@ -415,26 +407,29 @@ if (urlParams.has('trxref') || urlParams.has('reference')) {
 
         const data = await res.json();
         
-        // Refresh credits after successful training
         await fetchUserCredits();
 
         const details = data?.details || {};
         currentModelId = details.model_id || data?.model_id || 'mod_local_123';
-        modelFeatures = details.features_used || data?.features || ['Pclass', 'Sex', 'Age', 'SibSp', 'Parch', 'Fare'];
+        modelFeatures = details.features_used || data?.features || [];
         const defaults = details.feature_defaults || {};
         const categoricalOptions = details.categorical_options || {};
         const modelType = (details.model_type || data?.model_type || 'classification').toUpperCase();
-        const performanceMetrics = details.performance_metrics || data?.metrics || { accuracy: 0.95 };
+        
+        // Robust metrics extraction supporting all backend metrics payloads
+        const performanceMetrics = details.performance_metrics || data?.metrics || details.metrics || { accuracy: data?.accuracy || 0.95 };
 
         document.getElementById('modelTypeBadge').textContent = modelType;
         const metricsGrid = document.getElementById('metricsGrid');
         let metricsHtml = '';
         
         for (const [key, val] of Object.entries(performanceMetrics || {})) {
+            const formattedVal = typeof val === 'number' ? val.toFixed(4) : val;
+            const formattedKey = key.replace(/_/g, ' ').toUpperCase();
             metricsHtml += `
-                <div class="bg-gray-50 p-4 rounded-xl border border-gray-100">
-                    <p class="text-xs text-gray-500 uppercase">${key}</p>
-                    <p class="text-xl font-bold text-gray-900 mt-1">${val}</p>
+                <div class="bg-gray-50 p-4 rounded-xl border border-gray-100 text-center">
+                    <p class="text-xs text-gray-500 uppercase tracking-wider font-semibold">${formattedKey}</p>
+                    <p class="text-xl font-bold text-gray-900 mt-1">${formattedVal}</p>
                 </div>
             `;
         }
@@ -495,7 +490,6 @@ if (urlParams.has('trxref') || urlParams.has('reference')) {
                 inputData[feat] = val;
             });
 
-            // Fetch token for prediction if your endpoint requires it
             const { data: { session } } = await supabaseClient.auth.getSession();
             const token = session ? session.access_token : '';
 
