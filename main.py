@@ -3,16 +3,30 @@ import shutil
 import hmac
 import hashlib
 import json
+import io
+import uuid
 import requests
 import traceback
+import joblib
+import pandas as pd
+import numpy as np
 from pathlib import Path
 
 from fastapi import FastAPI, UploadFile, File, Query, Depends, HTTPException, Security, Request, Header
+from fastapi.responses import FileResponse
 from fastapi.security.api_key import APIKeyHeader
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, EmailStr
 from dotenv import load_dotenv
 from supabase import create_client, Client
+
+from sklearn.model_selection import train_test_split
+from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor
+from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, r2_score, mean_squared_error, mean_absolute_error
+from sklearn.impute import SimpleImputer
+from sklearn.preprocessing import OneHotEncoder, StandardScaler
+from sklearn.compose import ColumnTransformer
+from sklearn.pipeline import Pipeline
 
 # --- 1. CONFIGURATION & ENV SETUP ---
 env_path = Path(__file__).parent / ".env"
@@ -59,6 +73,9 @@ class PaymentInitRequest(BaseModel):
     user_id: str
     email: EmailStr
     payment_type: str  # "credit_pack" or "pro_subscription"
+
+class PredictionRequest(BaseModel):
+    input_data: dict
 
 
 # --- 3. AUTHENTICATION ---
@@ -114,7 +131,7 @@ def initialize_payment(payload: PaymentInitRequest):
         data = {
             "email": payload.email,
             "amount": 15000 * 100,  # ₦15,000/month
-            "plan": "PLN_YOUR_PLAN_CODE",  # Replace with your Plan Code from Paystack Dashboard
+            "plan": "PLN_YOUR_PLAN_CODE",  
             "metadata": {"user_id": payload.user_id, "payment_type": "pro_subscription"}
         }
     else:
@@ -153,7 +170,6 @@ async def paystack_webhook(request: Request, x_paystack_signature: str = Header(
         if user_id:
             payment_type = metadata.get("payment_type")
             
-            # Use execute() instead of single() to prevent exceptions when user has no profile
             profile_res = supabase.table("profiles").select("*").eq("id", user_id).execute()
             profile_exists = len(profile_res.data) > 0
             current_credits = profile_res.data[0].get("credits", 0) if profile_exists else 0
@@ -190,30 +206,22 @@ async def paystack_webhook(request: Request, x_paystack_signature: str = Header(
 
 
 @app.post("/train")
-async def train_model(authorization: str = Header(None)):
+async def train_model_legacy(authorization: str = Header(None)):
     if not authorization or not authorization.startswith("Bearer "):
         raise HTTPException(status_code=401, detail="Missing authorization token")
 
     token = authorization.split(" ")[1]
-    
-    # 1. Verify user identity via Supabase Auth
     user_response = supabase_admin.auth.get_user(token)
     if not user_response or not user_response.user:
         raise HTTPException(status_code=401, detail="Invalid auth token")
         
     user_id = user_response.user.id
-
-    # 2. Fetch credits directly using admin client
     profile = supabase_admin.table("profiles").select("credits").eq("id", user_id).execute()
     
     if not profile.data or profile.data[0].get("credits", 0) < 1:
         raise HTTPException(status_code=400, detail="Insufficient credits. Please purchase a credit pack.")
 
     current_credits = profile.data[0]["credits"]
-
-    # --- YOUR MACHINE LEARNING TRAINING LOGIC HERE ---
-
-    # 3. Deduct 1 credit after successful training execution
     supabase_admin.table("profiles").update({"credits": current_credits - 1}).eq("id", user_id).execute()
 
     return {"status": "success", "remaining_credits": current_credits - 1}
@@ -226,7 +234,6 @@ async def upload_and_train(
     target_column: str = Query(...),
     authorization: str = Header(None)
 ):
-    # Extract real User ID from Supabase Auth Token
     if not authorization or not authorization.startswith("Bearer "):
         raise HTTPException(status_code=401, detail="Missing or invalid authorization header")
 
@@ -238,9 +245,7 @@ async def upload_and_train(
 
     user_id = user_response.user.id
 
-    # Query profiles using the authenticated user_id
     profile_response = supabase.table("profiles").select("*").eq("id", user_id).execute()
-    
     if not profile_response.data:
         raise HTTPException(status_code=400, detail="Profile not found")
 
@@ -251,8 +256,144 @@ async def upload_and_train(
     if plan_type != "pro_subscriber" and credits <= 0:
         raise HTTPException(status_code=402, detail="Insufficient credits. Please purchase a credit pack.")
 
-    # Deduct credit and proceed with training
     if plan_type != "pro_subscriber":
         supabase.table("profiles").update({"credits": credits - 1}).eq("id", user_id).execute()
 
-    # ... REST OF YOUR ML PIPELINE CODE ...
+    try:
+        content = await file.read()
+        filename = file.filename.lower()
+        
+        if filename.endswith('.csv'):
+            df = pd.read_csv(io.BytesIO(content))
+        elif filename.endswith(('.xlsx', '.xls')):
+            df = pd.read_excel(io.BytesIO(content))
+        else:
+            raise HTTPException(status_code=400, detail="Unsupported file format. Please upload CSV or Excel.")
+
+        if target_column not in df.columns:
+            raise HTTPException(status_code=400, detail=f"Target column '{target_column}' not found in dataset.")
+
+        # Drop rows where target is null
+        df = df.dropna(subset=[target_column])
+
+        X = df.drop(columns=[target_column])
+        y = df[target_column]
+
+        # Drop constant columns
+        X = X.loc[:, X.nunique() > 1]
+        if X.empty:
+            raise HTTPException(status_code=400, detail="Dataset has no valid feature columns remaining after filtering.")
+
+        # Determine if classification or regression
+        is_classification = True
+        if pd.api.types.is_numeric_dtype(y):
+            if y.nunique() > 20:
+                is_classification = False
+
+        X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+
+        numeric_cols = X.select_dtypes(include=['int64', 'float64', 'int32', 'float32']).columns.tolist()
+        categorical_cols = X.select_dtypes(include=['object', 'category', 'bool']).columns.tolist()
+
+        numeric_transformer = Pipeline(steps=[
+            ('imputer', SimpleImputer(strategy='median')),
+            ('scaler', StandardScaler())
+        ])
+
+        categorical_transformer = Pipeline(steps=[
+            ('imputer', SimpleImputer(strategy='constant', fill_value='missing')),
+            ('onehot', OneHotEncoder(handle_unknown='ignore', sparse_output=False))
+        ])
+
+        preprocessor = ColumnTransformer(
+            transformers=[
+                ('num', numeric_transformer, numeric_cols),
+                ('cat', categorical_transformer, categorical_cols)
+            ])
+
+        if is_classification:
+            model = RandomForestClassifier(random_state=42)
+            model_type = "classification"
+        else:
+            model = RandomForestRegressor(random_state=42)
+            model_type = "regression"
+
+        pipeline = Pipeline(steps=[('preprocessor', preprocessor), ('model', model)])
+        pipeline.fit(X_train, y_train)
+
+        y_pred = pipeline.predict(X_test)
+
+        # Calculate metrics
+        if is_classification:
+            avg_type = 'binary' if y.nunique() == 2 else 'weighted'
+            performance_metrics = {
+                "accuracy": round(float(accuracy_score(y_test, y_pred)), 4),
+                "precision": round(float(precision_score(y_test, y_pred, average=avg_type, zero_division=0)), 4),
+                "recall": round(float(recall_score(y_test, y_pred, average=avg_type, zero_division=0)), 4),
+                "f1_score": round(float(f1_score(y_test, y_pred, average=avg_type, zero_division=0)), 4)
+            }
+        else:
+            performance_metrics = {
+                "r2_score": round(float(r2_score(y_test, y_pred)), 4),
+                "rmse": round(float(np.sqrt(mean_squared_error(y_test, y_pred))), 4),
+                "mae": round(float(mean_absolute_error(y_test, y_pred)), 4)
+            }
+
+        # Build feature defaults & categorical options for the UI playground
+        feature_defaults = {}
+        categorical_options = {}
+        for col in X.columns:
+            if col in numeric_cols:
+                feature_defaults[col] = float(X[col].median()) if not X[col].empty else 0.0
+            else:
+                top_val = str(X[col].mode()[0]) if not X[col].mode().empty else "missing"
+                feature_defaults[col] = top_val
+                categorical_options[col] = X[col].dropna().astype(str).unique().tolist()[:50]
+
+        model_id = f"mod_{uuid.uuid4().hex[:10]}"
+        os.makedirs("models", exist_ok=True)
+        model_path = os.path.join("models", f"{model_id}.joblib")
+        joblib.dump(pipeline, model_path)
+
+        return {
+            "status": "success",
+            "details": {
+                "model_id": model_id,
+                "model_type": model_type,
+                "features_used": list(X.columns),
+                "performance_metrics": performance_metrics,
+                "feature_defaults": feature_defaults,
+                "categorical_options": categorical_options
+            }
+        }
+
+    except Exception as e:
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Training error: {str(e)}")
+
+
+@app.post("/predict/{model_id}")
+async def predict_model(model_id: str, payload: PredictionRequest):
+    model_path = os.path.join("models", f"{model_id}.joblib")
+    if not os.path.exists(model_path):
+        raise HTTPException(status_code=404, detail="Model not found or expired.")
+    try:
+        loaded_pipeline = joblib.load(model_path)
+        input_df = pd.DataFrame([payload.input_data])
+        prediction = loaded_pipeline.predict(input_df)[0]
+        
+        if isinstance(prediction, (np.integer, np.floating)):
+            prediction = prediction.item()
+            
+        return {"prediction": prediction}
+    except Exception as e:
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/download-model/{model_id}")
+async def download_model(model_id: str):
+    model_path = os.path.join("models", f"{model_id}.joblib")
+    if not os.path.exists(model_path):
+        raise HTTPException(status_code=404, detail="Model file not found.")
+    return FileResponse(model_path, media_type="application/octet-stream", filename=f"{model_id}.joblib")
