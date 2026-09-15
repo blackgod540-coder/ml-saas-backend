@@ -199,7 +199,7 @@ async def upload_and_train(
                 status_code=402, 
                 detail="Insufficient credits. Please purchase a credit pack or upgrade to Pro."
             )
-        supabase.table("profiles").update({"credits": credits - 1}).eq("user_id", user_id).execute()
+        supabase.table("profiles").update({"credits": credits - 1}).eq("id", user_id).execute()
         print(f"-> [CREDIT GUARD] Deducted 1 credit. Remaining: {credits - 1}")
     else:
         print("-> [CREDIT GUARD] Pro Subscriber detected. Bypassing credit deduction.")
