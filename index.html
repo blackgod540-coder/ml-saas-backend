@@ -4,84 +4,100 @@
     <meta charset="UTF-8">
     <title>No-Code ML Platform</title>
     <script src="https://cdn.tailwindcss.com"></script>
-    <!-- The src script must be separate from inner JavaScript -->
     <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/xlsx.full.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 </head>
 <body class="bg-gray-100 min-h-screen p-6">
     <div class="max-w-3xl mx-auto space-y-6">
         
-<!-- Header -->
-<div class="bg-white p-6 rounded-2xl shadow-sm border border-gray-200 flex justify-between items-center">
-    <div>
-        <h1 class="text-2xl font-bold text-gray-900">No-Code ML Dashboard</h1>
-        <p class="text-sm text-gray-500 mt-1">Upload CSV or Excel datasets, train production-grade models, and test predictions live.</p>
-    </div>
-    
-    <div class="flex items-center gap-3">
-        <!-- Live Credit Pill -->
-        <div id="creditBadge" class="hidden bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs font-semibold px-3 py-2 rounded-xl">
-            Credits: <span id="creditCount" class="text-sm font-bold">0</span>
-        </div>
-
-        <button onclick="buyCredits()" id="buyCreditsBtn" class="bg-indigo-600 text-white font-medium py-2 px-4 rounded-xl hover:bg-indigo-700 transition shadow-sm text-sm">
-            Buy Credits (50 for ₦5,000)
-        </button>
-
-        <!-- Auth Button -->
-        <button onclick="toggleAuthModal()" id="authBtn" class="bg-gray-900 text-white font-medium py-2 px-4 rounded-xl hover:bg-gray-800 transition shadow-sm text-sm">
-            Log In / Sign Up
-        </button>
-    </div>
-</div>
-
-<!-- Auth Modal Overlay -->
-<div id="authModal" class="hidden fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50">
-    <div class="bg-white p-6 rounded-2xl shadow-xl max-w-sm w-full space-y-4">
-        <h3 id="authTitle" class="text-xl font-bold text-gray-900">Log In to Your Account</h3>
-        
-        <div class="space-y-3">
+        <!-- Header -->
+        <div class="bg-white p-6 rounded-2xl shadow-sm border border-gray-200 flex justify-between items-center">
             <div>
-                <label class="block text-xs font-medium text-gray-700 mb-1">Email</label>
-                <input type="email" id="authEmail" class="w-full border border-gray-300 rounded-xl p-2.5 text-sm focus:ring-2 focus:ring-blue-500 focus:outline-none"/>
+                <h1 class="text-2xl font-bold text-gray-900">No-Code ML Dashboard</h1>
+                <p class="text-sm text-gray-500 mt-1">Upload CSV or Excel datasets, train production-grade models, and test predictions live.</p>
             </div>
-            <div>
-                <label class="block text-xs font-medium text-gray-700 mb-1">Password</label>
-                <input type="password" id="authPassword" class="w-full border border-gray-300 rounded-xl p-2.5 text-sm focus:ring-2 focus:ring-blue-500 focus:outline-none"/>
+            
+            <div id="authActions" class="flex items-center gap-3">
+                <!-- Logged In View (Hidden by default) -->
+                <div id="loggedInView" class="hidden flex items-center gap-3">
+                    <div class="bg-emerald-50 text-emerald-700 px-3 py-1.5 rounded-lg text-sm font-medium border border-emerald-100 text-center flex flex-col justify-center">
+                        <span class="text-[10px] uppercase tracking-wider opacity-80 leading-none">Credits</span>
+                        <span id="creditCount" class="font-bold leading-tight">--</span>
+                    </div>
+                    
+                    <div class="flex flex-col gap-2">
+                        <button onclick="initiatePayment('credit_pack')" id="buyCreditsBtn" class="bg-indigo-600 text-white px-4 py-1.5 rounded-lg text-xs font-medium hover:bg-indigo-700 transition shadow-sm">
+                            + 10 Credits (₦5k)
+                        </button>
+                        <button onclick="initiatePayment('pro_subscription')" id="buyProBtn" class="bg-amber-500 text-white px-4 py-1.5 rounded-lg text-xs font-medium hover:bg-amber-600 transition shadow-sm">
+                            🚀 Unlimited (₦15k)
+                        </button>
+                    </div>
+
+                    <button onclick="supabaseClient.auth.signOut()" class="bg-gray-900 text-white px-4 py-3 rounded-lg text-sm font-medium hover:bg-gray-800 transition h-full">
+                        Log Out
+                    </button>
+                </div>
+
+                <!-- Logged Out View -->
+                <button onclick="toggleAuthModal()" id="authBtn" class="bg-gray-900 text-white font-medium py-2 px-4 rounded-xl hover:bg-gray-800 transition shadow-sm text-sm">
+                    Log In / Sign Up
+                </button>
             </div>
         </div>
 
-        <button onclick="handleAuthSubmit()" id="authSubmitBtn" class="w-full bg-blue-600 text-white font-medium py-2.5 rounded-xl hover:bg-blue-700 transition text-sm">
-            Log In
-        </button>
+        <!-- Auth Modal Overlay -->
+        <div id="authModal" class="hidden fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50">
+            <div class="bg-white p-6 rounded-2xl shadow-xl max-w-sm w-full space-y-4">
+                <h3 id="authTitle" class="text-xl font-bold text-gray-900">Log In to Your Account</h3>
+                
+                <div class="space-y-3">
+                    <div>
+                        <label class="block text-xs font-medium text-gray-700 mb-1">Email</label>
+                        <input type="email" id="authEmail" class="w-full border border-gray-300 rounded-xl p-2.5 text-sm focus:ring-2 focus:ring-blue-500 focus:outline-none"/>
+                    </div>
+                    <div>
+                        <label class="block text-xs font-medium text-gray-700 mb-1">Password</label>
+                        <input type="password" id="authPassword" class="w-full border border-gray-300 rounded-xl p-2.5 text-sm focus:ring-2 focus:ring-blue-500 focus:outline-none"/>
+                    </div>
+                </div>
 
-        <p class="text-xs text-center text-gray-500">
-            <span id="authToggleText">Don't have an account?</span> 
-            <button onclick="switchAuthMode()" id="authToggleBtn" class="text-blue-600 font-semibold underline ml-1">Sign Up</button>
-        </p>
+                <button onclick="handleAuthSubmit()" id="authSubmitBtn" class="w-full bg-blue-600 text-white font-medium py-2.5 rounded-xl hover:bg-blue-700 transition text-sm">
+                    Log In
+                </button>
 
-        <button onclick="toggleAuthModal()" class="w-full text-xs text-gray-400 hover:text-gray-600 text-center pt-2">Cancel</button>
-    </div>
-</div>
+                <p class="text-xs text-center text-gray-500">
+                    <span id="authToggleText">Don't have an account?</span> 
+                    <button onclick="switchAuthMode()" id="authToggleBtn" class="text-blue-600 font-semibold underline ml-1">Sign Up</button>
+                </p>
+
+                <button onclick="toggleAuthModal()" class="w-full text-xs text-gray-400 hover:text-gray-600 text-center pt-2">Cancel</button>
+            </div>
+        </div>
 
 
-<!-- Out of Credits Modal -->
-<div id="outOfCreditsModal" class="hidden fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50">
-    <div class="bg-white p-6 rounded-2xl shadow-xl max-w-sm w-full text-center space-y-4">
-        <div class="w-12 h-12 bg-amber-100 text-amber-600 rounded-full flex items-center justify-center mx-auto text-xl font-bold">⚡</div>
-        <h3 class="text-xl font-bold text-gray-900">You're Out of Credits!</h3>
-        <p class="text-sm text-gray-500">You've used your free training credits. Top up now to keep training production-grade machine learning models.</p>
-        
-        <button onclick="toggleOutOfCreditsModal(); buyCredits();" class="w-full bg-indigo-600 text-white font-medium py-2.5 rounded-xl hover:bg-indigo-700 transition text-sm shadow-sm">
-            Top Up 50 Credits (₦5,000)
-        </button>
-        <p class="text-[10px] text-gray-400 leading-tight pt-2">
-    Payments are securely processed via Paystack. By purchasing, you agree to our <a href="terms.html" target="_blank" class="underline hover:text-gray-600">Terms & Conditions</a>. All sales are final.
-</p>
-        <button onclick="toggleOutOfCreditsModal()" class="w-full text-xs text-gray-400 hover:text-gray-600 pt-1">Maybe Later</button>
-    
-    </div>
-</div>
+        <!-- Out of Credits Modal -->
+        <div id="outOfCreditsModal" class="hidden fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50">
+            <div class="bg-white p-6 rounded-2xl shadow-xl max-w-sm w-full text-center space-y-4">
+                <div class="w-12 h-12 bg-amber-100 text-amber-600 rounded-full flex items-center justify-center mx-auto text-xl font-bold">⚡</div>
+                <h3 class="text-xl font-bold text-gray-900">You're Out of Credits!</h3>
+                <p class="text-sm text-gray-500">You've used your free training credits. Upgrade or top up now to keep training production-grade models.</p>
+                
+                <div class="space-y-2 mt-4">
+                    <button onclick="toggleOutOfCreditsModal(); initiatePayment('pro_subscription');" class="w-full bg-amber-500 text-white font-medium py-2.5 rounded-xl hover:bg-amber-600 transition text-sm shadow-sm">
+                        🚀 Upgrade to Unlimited (₦15,000/mo)
+                    </button>
+                    <button onclick="toggleOutOfCreditsModal(); initiatePayment('credit_pack');" class="w-full bg-indigo-600 text-white font-medium py-2.5 rounded-xl hover:bg-indigo-700 transition text-sm shadow-sm">
+                        Top Up 10 Credits (₦5,000)
+                    </button>
+                </div>
+                
+                <p class="text-[10px] text-gray-400 leading-tight pt-2">
+                    Payments are securely processed via Paystack. By purchasing, you agree to our <a href="terms.html" target="_blank" class="underline hover:text-gray-600">Terms & Conditions</a>. All sales are final.
+                </p>
+                <button onclick="toggleOutOfCreditsModal()" class="w-full text-xs text-gray-400 hover:text-gray-600 pt-1">Maybe Later</button>
+            </div>
+        </div>
 
         <!-- Step 1: Upload & Train -->
         <div class="bg-white p-6 rounded-2xl shadow-sm border border-gray-200">
@@ -238,18 +254,14 @@
 
     function updateUserUI() {
         const authBtn = document.getElementById('authBtn');
-        const creditBadge = document.getElementById('creditBadge');
-
-        if (!authBtn) return;
+        const loggedInView = document.getElementById('loggedInView');
 
         if (currentUser) {
-            authBtn.textContent = "Log Out";
-            authBtn.onclick = () => supabaseClient.auth.signOut();
-            if (creditBadge) creditBadge.classList.remove('hidden');
+            if (authBtn) authBtn.classList.add('hidden');
+            if (loggedInView) loggedInView.classList.remove('hidden');
         } else {
-            authBtn.textContent = "Log In / Sign Up";
-            authBtn.onclick = () => toggleAuthModal();
-            if (creditBadge) creditBadge.classList.add('hidden');
+            if (authBtn) authBtn.classList.remove('hidden');
+            if (loggedInView) loggedInView.classList.add('hidden');
         }
     }
 
@@ -258,36 +270,46 @@
         try {
             const { data, error } = await supabaseClient
                 .from('profiles')
-                .select('credits')
+                .select('credits, plan_type')
                 .eq('id', currentUser.id)
                 .maybeSingle();
 
             if (error) throw error;
             const creditCountElem = document.getElementById('creditCount');
-            if (creditCountElem) creditCountElem.textContent = data?.credits || 0;
+            if (creditCountElem) {
+                if (data?.plan_type === 'pro_subscriber') {
+                    creditCountElem.textContent = '∞';
+                } else {
+                    creditCountElem.textContent = data?.credits || 0;
+                }
+            }
         } catch (err) {
             console.error("Failed to fetch credits:", err.message);
         }
     }
 
     // 3. Dynamic Payment Processor
-    async function buyCredits() {
+    async function initiatePayment(paymentType) {
         if (!currentUser) {
             alert("Please log in first to purchase credits.");
             toggleAuthModal();
             return;
         }
 
-        const btn = document.getElementById('buyCreditsBtn');
-        const originalText = btn.textContent;
+        let btnId = paymentType === 'pro_subscription' ? 'buyProBtn' : 'buyCreditsBtn';
+        const btn = document.getElementById(btnId);
+        let originalText = btn ? btn.textContent : "Processing...";
         
         try {
-            btn.textContent = "Redirecting...";
-            btn.disabled = true;
-            btn.classList.add('opacity-50');
+            if (btn) {
+                btn.textContent = "Redirecting...";
+                btn.disabled = true;
+                btn.classList.add('opacity-50');
+            }
 
             const { data: { session } } = await supabaseClient.auth.getSession();
             const token = session ? session.access_token : '';
+            const amount = paymentType === 'pro_subscription' ? 15000 : 5000;
 
             const res = await fetch(`${API_BASE_URL}/pay/initialize`, {
                 method: 'POST',
@@ -297,8 +319,8 @@
                 },
                 body: JSON.stringify({
                     email: currentUser.email,
-                    amount: 5000,
-                    payment_type: "credit_pack",
+                    amount: amount,
+                    payment_type: paymentType,
                     user_id: currentUser.id,
                     callback_url: window.location.origin
                 })
@@ -320,9 +342,11 @@
 
         } catch (error) {
             alert('Payment Error: ' + error.message);
-            btn.textContent = originalText;
-            btn.disabled = false;
-            btn.classList.remove('opacity-50');
+            if (btn) {
+                btn.textContent = originalText;
+                btn.disabled = false;
+                btn.classList.remove('opacity-50');
+            }
         }
     }
 
@@ -428,10 +452,8 @@
                 return;
             }
 
-            // Fallback for other errors (e.g., bad CSV format, 500 server error)
             throw new Error(errorDetail || 'Training failed. Please check your dataset.');
         }
-
 
         const data = await res.json();
         
@@ -444,7 +466,6 @@
         const categoricalOptions = details.categorical_options || {};
         const modelType = (details.model_type || data?.model_type || 'classification').toUpperCase();
         
-        // Robust metrics extraction supporting all backend metrics payloads
         const performanceMetrics = details.performance_metrics || data?.metrics || details.metrics || { accuracy: data?.accuracy || 0.95 };
 
         document.getElementById('modelTypeBadge').textContent = modelType;
@@ -546,13 +567,13 @@
             btn.disabled = false;
         }
     }
+    
     function toggleOutOfCreditsModal() {
-    const modal = document.getElementById('outOfCreditsModal');
-    if (modal) modal.classList.toggle('hidden');
-}
-
-
+        const modal = document.getElementById('outOfCreditsModal');
+        if (modal) modal.classList.toggle('hidden');
+    }
 </script>
+
 <footer class="mt-12 mb-6 text-center text-xs text-gray-400">
     <p>© 2026 No-Code ML Platform. All rights reserved.</p>
     <p class="mt-1">
