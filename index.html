@@ -64,6 +64,25 @@
     </div>
 </div>
 
+
+<!-- Out of Credits Modal -->
+<div id="outOfCreditsModal" class="hidden fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50">
+    <div class="bg-white p-6 rounded-2xl shadow-xl max-w-sm w-full text-center space-y-4">
+        <div class="w-12 h-12 bg-amber-100 text-amber-600 rounded-full flex items-center justify-center mx-auto text-xl font-bold">⚡</div>
+        <h3 class="text-xl font-bold text-gray-900">You're Out of Credits!</h3>
+        <p class="text-sm text-gray-500">You've used your free training credits. Top up now to keep training production-grade machine learning models.</p>
+        
+        <button onclick="toggleOutOfCreditsModal(); buyCredits();" class="w-full bg-indigo-600 text-white font-medium py-2.5 rounded-xl hover:bg-indigo-700 transition text-sm shadow-sm">
+            Top Up 50 Credits (₦5,000)
+        </button>
+        <p class="text-[10px] text-gray-400 leading-tight pt-2">
+    Payments are securely processed via Paystack. By purchasing, you agree to our <a href="terms.html" target="_blank" class="underline hover:text-gray-600">Terms & Conditions</a>. All sales are final.
+</p>
+        <button onclick="toggleOutOfCreditsModal()" class="w-full text-xs text-gray-400 hover:text-gray-600 pt-1">Maybe Later</button>
+    
+    </div>
+</div>
+
         <!-- Step 1: Upload & Train -->
         <div class="bg-white p-6 rounded-2xl shadow-sm border border-gray-200">
             <h2 class="text-lg font-semibold text-gray-800 mb-4">1. Upload Dataset & Train</h2>
@@ -401,9 +420,18 @@
         });
 
         if (!res.ok) {
-            const errData = await res.json();
-            throw new Error(errData.detail || 'Training failed.');
+            const errData = await res.json().catch(() => ({}));
+            const errorDetail = errData.detail || 'Training failed.';
+
+            if (res.status === 402 || errorDetail.toLowerCase().includes('credits')) {
+                toggleOutOfCreditsModal();
+                return;
+            }
+
+            // Fallback for other errors (e.g., bad CSV format, 500 server error)
+            throw new Error(errorDetail || 'Training failed. Please check your dataset.');
         }
+
 
         const data = await res.json();
         
@@ -518,6 +546,19 @@
             btn.disabled = false;
         }
     }
+    function toggleOutOfCreditsModal() {
+    const modal = document.getElementById('outOfCreditsModal');
+    if (modal) modal.classList.toggle('hidden');
+}
+
+
 </script>
+<footer class="mt-12 mb-6 text-center text-xs text-gray-400">
+    <p>© 2026 No-Code ML Platform. All rights reserved.</p>
+    <p class="mt-1">
+        By using this platform, you agree to our 
+        <a href="terms.html" target="_blank" class="underline hover:text-gray-600">Terms & Conditions</a>.
+    </p>
+</footer>
 </body>
 </html>
