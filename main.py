@@ -120,8 +120,8 @@ def initialize_payment(payload: PaymentInitRequest):
     }
 
     if payload.payment_type == "credit_pack":
-        amount_kobo = 5000 * 100  # ₦5,000 for 50 credits
-        metadata = {"user_id": payload.user_id, "payment_type": "credit_pack", "credits_to_add": 50}
+        amount_kobo = 5000 * 100  # ₦5,000 for 10 credits
+        metadata = {"user_id": payload.user_id, "payment_type": "credit_pack", "credits_to_add": 10}
         data = {
             "email": payload.email,
             "amount": amount_kobo,
@@ -131,7 +131,7 @@ def initialize_payment(payload: PaymentInitRequest):
         data = {
             "email": payload.email,
             "amount": 15000 * 100,  # ₦15,000/month
-            "plan": "PLN_YOUR_PLAN_CODE",  
+            "plan": "PLN_tlessu0cswidxs5",  
             "metadata": {"user_id": payload.user_id, "payment_type": "pro_subscription"}
         }
     else:
@@ -175,7 +175,7 @@ async def paystack_webhook(request: Request, x_paystack_signature: str = Header(
             current_credits = profile_res.data[0].get("credits", 0) if profile_exists else 0
 
             if payment_type == "credit_pack":
-                credits_to_add = metadata.get("credits_to_add", 50)
+                credits_to_add = metadata.get("credits_to_add", 10)
                 new_credits = current_credits + credits_to_add
                 
                 if profile_exists:
