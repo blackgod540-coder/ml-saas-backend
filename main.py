@@ -11,6 +11,7 @@ import joblib
 import pandas as pd
 import numpy as np
 from pathlib import Path
+from datetime import datetime, timedelta, timezone
 
 from fastapi import FastAPI, UploadFile, File, Query, Depends, HTTPException, Security, Request, Header
 from fastapi.responses import FileResponse
@@ -148,7 +149,7 @@ def initialize_payment(payload: PaymentInitRequest):
 
 @app.post("/webhook/paystack")
 async def paystack_webhook(request: Request, x_paystack_signature: str = Header(None)):
-    """Listens for background payment confirmations from Paystack."""
+    """Listens for background payment confirmations and recurring charges."""
     body = await request.body()
 
     computed_signature = hmac.new(
@@ -161,8 +162,10 @@ async def paystack_webhook(request: Request, x_paystack_signature: str = Header(
         raise HTTPException(status_code=400, detail="Invalid signature")
 
     event_data = json.loads(body)
+    event_type = event_data.get("event")
 
-    if event_data.get("event") == "charge.success":
+    # Handle Successful Charges (Initial and Recurring)
+    if event_type == "charge.success":
         data = event_data["data"]
         metadata = data.get("metadata", {})
         user_id = metadata.get("user_id")
@@ -175,32 +178,50 @@ async def paystack_webhook(request: Request, x_paystack_signature: str = Header(
             current_credits = profile_res.data[0].get("credits", 0) if profile_exists else 0
 
             if payment_type == "credit_pack":
-                credits_to_add = metadata.get("credits_to_add", 10)
+                # ENFORCING EXPLICIT 10 CREDITS HERE TO FIX THE 50 CREDIT BUG
+                credits_to_add = int(metadata.get("credits_to_add", 10))
                 new_credits = current_credits + credits_to_add
                 
                 if profile_exists:
                     supabase.table("profiles").update({
                         "credits": new_credits,
-                        "plan_type": "credit_pack"
+                        "plan_type": "free" # Ensure they are on free track when buying credits
                     }).eq("id", user_id).execute()
                 else:
                     supabase.table("profiles").insert({
                         "id": user_id, 
                         "credits": new_credits,
-                        "plan_type": "credit_pack"
+                        "plan_type": "free"
                     }).execute()
 
             elif payment_type == "pro_subscription":
+                # Add 30 Days to current time for the Time-Lock
+                expiry_date = (datetime.now(timezone.utc) + timedelta(days=30)).isoformat()
+                
                 if profile_exists:
                     supabase.table("profiles").update({
-                        "plan_type": "pro_subscriber"
+                        "plan_type": "pro_subscriber",
+                        "subscription_expires_at": expiry_date
                     }).eq("id", user_id).execute()
                 else:
                     supabase.table("profiles").insert({
                         "id": user_id,
                         "credits": current_credits,
-                        "plan_type": "pro_subscriber"
+                        "plan_type": "pro_subscriber",
+                        "subscription_expires_at": expiry_date
                     }).execute()
+
+    # Handle Failed Recurring Subscriptions
+    elif event_type in ["invoice.payment_failed", "subscription.disable", "charge.failed"]:
+        data = event_data.get("data", {})
+        metadata = data.get("metadata", {})
+        user_id = metadata.get("user_id")
+        
+        # If metadata exists, immediately downgrade the user
+        if user_id:
+            supabase.table("profiles").update({
+                "plan_type": "free"
+            }).eq("id", user_id).execute()
 
     return {"status": "success"}
 
@@ -216,7 +237,7 @@ async def train_model_legacy(authorization: str = Header(None)):
         raise HTTPException(status_code=401, detail="Invalid auth token")
         
     user_id = user_response.user.id
-    profile = supabase_admin.table("profiles").select("credits").eq("id", user_id).execute()
+    profile = supabase_admin.table("profiles").select("*").eq("id", user_id).execute()
     
     if not profile.data or profile.data[0].get("credits", 0) < 1:
         raise HTTPException(status_code=400, detail="Insufficient credits. Please purchase a credit pack.")
@@ -227,7 +248,7 @@ async def train_model_legacy(authorization: str = Header(None)):
     return {"status": "success", "remaining_credits": current_credits - 1}
 
 
-# --- 6. CORE ML ROUTE ---
+# --- 6. CORE ML ROUTE (WITH TIME-LOCK MIDDLEWARE) ---
 @app.post("/upload-and-train/")
 async def upload_and_train(
     file: UploadFile = File(...),
@@ -252,9 +273,30 @@ async def upload_and_train(
     user_profile = profile_response.data[0]
     credits = user_profile.get("credits", 0)
     plan_type = user_profile.get("plan_type", "free")
+    expires_at_str = user_profile.get("subscription_expires_at")
 
+    # --- TIME-LOCK VALIDATION ---
+    if plan_type == "pro_subscriber":
+        is_expired = True
+        
+        if expires_at_str:
+            try:
+                # Handle ISO formatting from Supabase
+                expires_at = datetime.fromisoformat(expires_at_str.replace("Z", "+00:00"))
+                # If current time is less than expiration time, they are still active
+                if datetime.now(timezone.utc) < expires_at:
+                    is_expired = False
+            except ValueError:
+                pass # If parsing fails, default to expired for safety
+                
+        # Downgrade user if subscription is expired
+        if is_expired:
+            plan_type = "free"
+            supabase.table("profiles").update({"plan_type": "free"}).eq("id", user_id).execute()
+
+    # --- CREDIT DEDUCTION & GATEKEEPING ---
     if plan_type != "pro_subscriber" and credits <= 0:
-        raise HTTPException(status_code=402, detail="Insufficient credits. Please purchase a credit pack.")
+        raise HTTPException(status_code=402, detail="Insufficient credits. Please purchase a credit pack or upgrade.")
 
     if plan_type != "pro_subscriber":
         supabase.table("profiles").update({"credits": credits - 1}).eq("id", user_id).execute()
