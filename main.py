@@ -245,29 +245,7 @@ async def paystack_webhook(request: Request, x_paystack_signature: str = Header(
     return {"status": "success"}
 
 
-@app.post("/train")
-async def train_model_legacy(authorization: str = Header(None)):
-    if not authorization or not authorization.startswith("Bearer "):
-        raise HTTPException(status_code=401, detail="Missing authorization token")
-
-    token = authorization.split(" ")[1]
-    user_response = supabase_admin.auth.get_user(token)
-    if not user_response or not user_response.user:
-        raise HTTPException(status_code=401, detail="Invalid auth token")
-        
-    user_id = user_response.user.id
-    profile = supabase_admin.table("profiles").select("*").eq("id", user_id).execute()
-    
-    if not profile.data or profile.data[0].get("credits", 0) < 1:
-        raise HTTPException(status_code=400, detail="Insufficient credits. Please purchase a credit pack.")
-
-    current_credits = profile.data[0]["credits"]
-    supabase_admin.table("profiles").update({"credits": current_credits - 1}).eq("id", user_id).execute()
-
-    return {"status": "success", "remaining_credits": current_credits - 1}
-
-
-# --- 6. CORE ML ROUTE (WITH RAM CRASH & FILE SIZE PROTECTION) ---
+# --- 6. CORE ML ROUTE (WITH ATOMIC CREDIT DEDUCTION) ---
 @app.post("/upload-and-train/")
 async def upload_and_train(
     file: UploadFile = File(...),
@@ -290,7 +268,6 @@ async def upload_and_train(
         raise HTTPException(status_code=400, detail="Profile not found")
 
     user_profile = profile_response.data[0]
-    credits = user_profile.get("credits", 0)
     plan_type = user_profile.get("plan_type", "free")
     expires_at_str = user_profile.get("subscription_expires_at")
 
@@ -309,12 +286,12 @@ async def upload_and_train(
             plan_type = "free"
             supabase.table("profiles").update({"plan_type": "free"}).eq("id", user_id).execute()
 
-    # --- CREDIT DEDUCTION & GATEKEEPING ---
-    if plan_type != "pro_subscriber" and credits <= 0:
-        raise HTTPException(status_code=402, detail="Insufficient credits. Please purchase a credit pack or upgrade.")
-
+    # --- ATOMIC CREDIT DEDUCTION (RPC) ---
     if plan_type != "pro_subscriber":
-        supabase.table("profiles").update({"credits": credits - 1}).eq("id", user_id).execute()
+        # Let Postgres handle the credit check and deduction atomically to prevent race conditions
+        deduction_res = supabase.rpc("decrement_credits", {"user_id_param": user_id}).execute()
+        if not deduction_res.data:
+            raise HTTPException(status_code=402, detail="Insufficient credits. Please purchase a credit pack or upgrade.")
 
     try:
         content = await file.read()
