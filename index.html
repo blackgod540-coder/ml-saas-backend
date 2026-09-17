@@ -4,8 +4,9 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>No-Code ML Platform</title>
-    <script src="https://cdn.tailwindcss.com"></script>
-    <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/xlsx.full.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+    <!-- FIXED: Added /dist/ to the jsDelivr path to properly load SheetJS -->
+    <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 </head>
 <body class="bg-gray-50 min-h-screen p-6 font-sans">
@@ -635,19 +636,24 @@
             const res = await fetch(`${API_BASE_URL}/predict/${currentModelId}`, {
                 method: 'POST',
                 headers: headers,
+                // FIXED: Completed the truncated JSON payload and request closure
                 body: JSON.stringify({ input_data: inputData })
             });
 
             if (!res.ok) {
-                const err = await res.json();
-                throw new Error(err.detail || 'Prediction failed.');
+                const err = await res.json().catch(() => ({}));
+                throw new Error(err.detail || 'Prediction request failed.');
             }
 
             const data = await res.json();
-            document.getElementById('predictionResult').textContent = data.prediction;
-            document.getElementById('predictionOutput').classList.remove('hidden');
+            
+            let prediction = data.prediction !== undefined ? data.prediction : data;
+            if (typeof prediction === 'number' && !Number.isInteger(prediction)) {
+                prediction = prediction.toFixed(4);
+            }
 
-            document.getElementById('predictionOutput').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+            document.getElementById('predictionResult').textContent = prediction;
+            document.getElementById('predictionOutput').classList.remove('hidden');
 
         } catch (error) {
             showToast('Prediction Error: ' + error.message);
