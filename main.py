@@ -163,10 +163,18 @@ async def paystack_webhook(request: Request, x_paystack_signature: str = Header(
 
     event_data = json.loads(body)
     event_type = event_data.get("event")
+    data = event_data.get("data", {})
+    reference = data.get("reference")
+    
+    # --- WEBHOOK REPLAY GUARD ---
+    if reference:
+        tx_check = supabase.table("transactions").select("reference").eq("reference", reference).execute()
+        if len(tx_check.data) > 0:
+            print(f"-> [WEBHOOK] Transaction {reference} already processed. Ignoring replay attack.")
+            return {"status": "success", "message": "already_processed"}
 
     # Handle Successful Charges (Initial and Recurring)
     if event_type == "charge.success":
-        data = event_data["data"]
         metadata = data.get("metadata", {})
         user_id = metadata.get("user_id")
 
@@ -209,9 +217,16 @@ async def paystack_webhook(request: Request, x_paystack_signature: str = Header(
                         "subscription_expires_at": expiry_date
                     }).execute()
 
+            # Log the transaction to prevent future replay attacks
+            if reference:
+                supabase.table("transactions").insert({
+                    "reference": reference,
+                    "user_id": user_id,
+                    "event_type": event_type
+                }).execute()
+
     # Handle Failed Recurring Subscriptions
     elif event_type in ["invoice.payment_failed", "subscription.disable", "charge.failed"]:
-        data = event_data.get("data", {})
         metadata = data.get("metadata", {})
         user_id = metadata.get("user_id")
         
@@ -219,6 +234,13 @@ async def paystack_webhook(request: Request, x_paystack_signature: str = Header(
             supabase.table("profiles").update({
                 "plan_type": "free"
             }).eq("id", user_id).execute()
+            
+            if reference:
+                supabase.table("transactions").insert({
+                    "reference": reference,
+                    "user_id": user_id,
+                    "event_type": event_type
+                }).execute()
 
     return {"status": "success"}
 
@@ -245,7 +267,7 @@ async def train_model_legacy(authorization: str = Header(None)):
     return {"status": "success", "remaining_credits": current_credits - 1}
 
 
-# --- 6. CORE ML ROUTE (WITH CLOUD STORAGE BACKUP) ---
+# --- 6. CORE ML ROUTE (WITH RAM CRASH & FILE SIZE PROTECTION) ---
 @app.post("/upload-and-train/")
 async def upload_and_train(
     file: UploadFile = File(...),
@@ -296,6 +318,12 @@ async def upload_and_train(
 
     try:
         content = await file.read()
+        
+        # --- FILE SIZE GUARD (Max 15MB to prevent Render RAM crashes) ---
+        MAX_FILE_SIZE = 15 * 1024 * 1024  # 15 MB
+        if len(content) > MAX_FILE_SIZE:
+            raise HTTPException(status_code=413, detail="File too large. Maximum allowed size is 15MB.")
+
         filename = file.filename.lower()
         
         if filename.endswith('.csv'):
@@ -304,6 +332,10 @@ async def upload_and_train(
             df = pd.read_excel(io.BytesIO(content))
         else:
             raise HTTPException(status_code=400, detail="Unsupported file format. Please upload CSV or Excel.")
+
+        # --- ROW COUNT GUARD (Max 100,000 rows) ---
+        if len(df) > 100000:
+            raise HTTPException(status_code=400, detail="Dataset exceeds the maximum limit of 100,000 rows.")
 
         if target_column not in df.columns:
             raise HTTPException(status_code=400, detail=f"Target column '{target_column}' not found in dataset.")
@@ -409,6 +441,8 @@ async def upload_and_train(
             }
         }
 
+    except HTTPException:
+        raise
     except Exception as e:
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"Training error: {str(e)}")
@@ -418,7 +452,6 @@ async def upload_and_train(
 async def predict_model(model_id: str, payload: PredictionRequest):
     model_path = os.path.join("models", f"{model_id}.joblib")
     
-    # If file was wiped by Render ephemeral storage, fetch it from Supabase Storage
     if not os.path.exists(model_path):
         try:
             print(f"-> [STORAGE] Model {model_id} missing locally. Downloading from Supabase Storage...")
@@ -447,7 +480,6 @@ async def predict_model(model_id: str, payload: PredictionRequest):
 async def download_model(model_id: str):
     model_path = os.path.join("models", f"{model_id}.joblib")
     
-    # Check local cache, fetch from Supabase Storage if missing
     if not os.path.exists(model_path):
         try:
             print(f"-> [STORAGE] Model {model_id} missing locally for download. Fetching from Supabase...")
