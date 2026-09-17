@@ -178,14 +178,13 @@ async def paystack_webhook(request: Request, x_paystack_signature: str = Header(
             current_credits = profile_res.data[0].get("credits", 0) if profile_exists else 0
 
             if payment_type == "credit_pack":
-                # ENFORCING EXPLICIT 10 CREDITS HERE TO FIX THE 50 CREDIT BUG
                 credits_to_add = int(metadata.get("credits_to_add", 10))
                 new_credits = current_credits + credits_to_add
                 
                 if profile_exists:
                     supabase.table("profiles").update({
                         "credits": new_credits,
-                        "plan_type": "free" # Ensure they are on free track when buying credits
+                        "plan_type": "free"
                     }).eq("id", user_id).execute()
                 else:
                     supabase.table("profiles").insert({
@@ -195,7 +194,6 @@ async def paystack_webhook(request: Request, x_paystack_signature: str = Header(
                     }).execute()
 
             elif payment_type == "pro_subscription":
-                # Add 30 Days to current time for the Time-Lock
                 expiry_date = (datetime.now(timezone.utc) + timedelta(days=30)).isoformat()
                 
                 if profile_exists:
@@ -217,7 +215,6 @@ async def paystack_webhook(request: Request, x_paystack_signature: str = Header(
         metadata = data.get("metadata", {})
         user_id = metadata.get("user_id")
         
-        # If metadata exists, immediately downgrade the user
         if user_id:
             supabase.table("profiles").update({
                 "plan_type": "free"
@@ -248,7 +245,7 @@ async def train_model_legacy(authorization: str = Header(None)):
     return {"status": "success", "remaining_credits": current_credits - 1}
 
 
-# --- 6. CORE ML ROUTE (WITH TIME-LOCK MIDDLEWARE) ---
+# --- 6. CORE ML ROUTE (WITH CLOUD STORAGE BACKUP) ---
 @app.post("/upload-and-train/")
 async def upload_and_train(
     file: UploadFile = File(...),
@@ -278,18 +275,14 @@ async def upload_and_train(
     # --- TIME-LOCK VALIDATION ---
     if plan_type == "pro_subscriber":
         is_expired = True
-        
         if expires_at_str:
             try:
-                # Handle ISO formatting from Supabase
                 expires_at = datetime.fromisoformat(expires_at_str.replace("Z", "+00:00"))
-                # If current time is less than expiration time, they are still active
                 if datetime.now(timezone.utc) < expires_at:
                     is_expired = False
             except ValueError:
-                pass # If parsing fails, default to expired for safety
+                pass
                 
-        # Downgrade user if subscription is expired
         if is_expired:
             plan_type = "free"
             supabase.table("profiles").update({"plan_type": "free"}).eq("id", user_id).execute()
@@ -315,18 +308,15 @@ async def upload_and_train(
         if target_column not in df.columns:
             raise HTTPException(status_code=400, detail=f"Target column '{target_column}' not found in dataset.")
 
-        # Drop rows where target is null
         df = df.dropna(subset=[target_column])
 
         X = df.drop(columns=[target_column])
         y = df[target_column]
 
-        # Drop constant columns
         X = X.loc[:, X.nunique() > 1]
         if X.empty:
             raise HTTPException(status_code=400, detail="Dataset has no valid feature columns remaining after filtering.")
 
-        # Determine if classification or regression
         is_classification = True
         if pd.api.types.is_numeric_dtype(y):
             if y.nunique() > 20:
@@ -365,7 +355,6 @@ async def upload_and_train(
 
         y_pred = pipeline.predict(X_test)
 
-        # Calculate metrics
         if is_classification:
             avg_type = 'binary' if y.nunique() == 2 else 'weighted'
             performance_metrics = {
@@ -381,7 +370,6 @@ async def upload_and_train(
                 "mae": round(float(mean_absolute_error(y_test, y_pred)), 4)
             }
 
-        # Build feature defaults & categorical options for the UI playground
         feature_defaults = {}
         categorical_options = {}
         for col in X.columns:
@@ -396,6 +384,18 @@ async def upload_and_train(
         os.makedirs("models", exist_ok=True)
         model_path = os.path.join("models", f"{model_id}.joblib")
         joblib.dump(pipeline, model_path)
+
+        # --- BACKUP MODEL TO SUPABASE STORAGE ---
+        try:
+            with open(model_path, "rb") as f_model:
+                supabase.storage.from_("models").upload(
+                    file=f_model,
+                    path=f"{model_id}.joblib",
+                    file_options={"upsert": "true", "content-type": "application/octet-stream"}
+                )
+            print(f"-> [STORAGE] Successfully backed up model {model_id} to Supabase Storage.")
+        except Exception as storage_err:
+            print(f"-> [WARNING] Storage backup failed: {str(storage_err)}")
 
         return {
             "status": "success",
@@ -417,8 +417,18 @@ async def upload_and_train(
 @app.post("/predict/{model_id}")
 async def predict_model(model_id: str, payload: PredictionRequest):
     model_path = os.path.join("models", f"{model_id}.joblib")
+    
+    # If file was wiped by Render ephemeral storage, fetch it from Supabase Storage
     if not os.path.exists(model_path):
-        raise HTTPException(status_code=404, detail="Model not found or expired.")
+        try:
+            print(f"-> [STORAGE] Model {model_id} missing locally. Downloading from Supabase Storage...")
+            file_bytes = supabase.storage.from_("models").download(f"{model_id}.joblib")
+            os.makedirs("models", exist_ok=True)
+            with open(model_path, "wb") as f_out:
+                f_out.write(file_bytes)
+        except Exception as e:
+            raise HTTPException(status_code=404, detail="Model not found or expired in cloud storage.")
+
     try:
         loaded_pipeline = joblib.load(model_path)
         input_df = pd.DataFrame([payload.input_data])
@@ -436,6 +446,16 @@ async def predict_model(model_id: str, payload: PredictionRequest):
 @app.get("/download-model/{model_id}")
 async def download_model(model_id: str):
     model_path = os.path.join("models", f"{model_id}.joblib")
+    
+    # Check local cache, fetch from Supabase Storage if missing
     if not os.path.exists(model_path):
-        raise HTTPException(status_code=404, detail="Model file not found.")
+        try:
+            print(f"-> [STORAGE] Model {model_id} missing locally for download. Fetching from Supabase...")
+            file_bytes = supabase.storage.from_("models").download(f"{model_id}.joblib")
+            os.makedirs("models", exist_ok=True)
+            with open(model_path, "wb") as f_out:
+                f_out.write(file_bytes)
+        except Exception as e:
+            raise HTTPException(status_code=404, detail="Model file not found in cloud storage.")
+            
     return FileResponse(model_path, media_type="application/octet-stream", filename=f"{model_id}.joblib")
