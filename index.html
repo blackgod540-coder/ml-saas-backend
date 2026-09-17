@@ -2,6 +2,7 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>No-Code ML Platform</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/xlsx.full.min.js"></script>
@@ -114,7 +115,10 @@
             
             <div class="space-y-5">
                 <div class="bg-gray-50 p-4 rounded-xl border border-dashed border-gray-300 hover:border-blue-400 transition-colors">
-                    <label class="block text-sm font-semibold text-gray-700 mb-2">Select Dataset (CSV, XLSX, XLS)</label>
+                    <div class="flex justify-between items-center mb-2">
+                        <label class="block text-sm font-semibold text-gray-700">Select Dataset (CSV, XLSX, XLS)</label>
+                        <span class="text-xs font-semibold text-gray-400">Max file size: 25 MB</span>
+                    </div>
                     <input type="file" id="csvFile" accept=".csv, .xlsx, .xls" class="block w-full text-sm text-gray-500 file:mr-4 file:py-2.5 file:px-4 file:rounded-lg file:border-0 file:text-sm file:font-semibold file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100 cursor-pointer transition-colors"/>
                 </div>
                 
@@ -197,12 +201,14 @@
     </footer>
 
     <script>
-    // Global Environment Variables
+    // Global Environment & File Size Configuration
     const API_BASE_URL = "https://ml-saas-backend.onrender.com";
-    // NOTE: Hardcoding API keys in frontend JS is insecure for production. Move this to backend or rely solely on Supabase Auth tokens eventually.
     const API_KEY = "my_secret_test_key_123"; 
     const SUPABASE_URL = "https://vrirjtjhmpgydrhqpcib.supabase.co"; 
     const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InZyaXJqdGpobXBneWRyaHFwY2liIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODkwNjQ2NTYsImV4cCI6MjEwNDY0MDY1Nn0.20BIGwNSzIR8V_0igHUsBETs3m1YfWomPZcQ0ZcmF54";
+
+    const MAX_FILE_SIZE_MB = 25;
+    const MAX_FILE_SIZE_BYTES = MAX_FILE_SIZE_MB * 1024 * 1024;
 
     const supabaseClient = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
@@ -213,7 +219,6 @@
 
     // --- UTILITIES ---
     
-    // Custom Toast Notification replacing standard alerts
     function showToast(message, type = 'error') {
         const container = document.getElementById('toastContainer');
         const toast = document.createElement('div');
@@ -231,19 +236,16 @@
         
         container.appendChild(toast);
         
-        // Animate in
         requestAnimationFrame(() => {
             toast.classList.remove('translate-y-2', 'opacity-0');
         });
 
-        // Auto-remove after 4 seconds
         setTimeout(() => {
             toast.classList.add('opacity-0', 'translate-x-4');
             setTimeout(() => toast.remove(), 300);
         }, 4000);
     }
 
-    // Standardize API Headers (DRY)
     async function getApiHeaders(isFormData = false) {
         const { data: { session } } = await supabaseClient.auth.getSession();
         const headers = {
@@ -284,6 +286,11 @@
     // 2. Auth Modal & UI Helpers
     function toggleAuthModal() {
         const modal = document.getElementById('authModal');
+        if (modal) modal.classList.toggle('hidden');
+    }
+
+    function toggleOutOfCreditsModal() {
+        const modal = document.getElementById('outOfCreditsModal');
         if (modal) modal.classList.toggle('hidden');
     }
 
@@ -372,7 +379,7 @@
         }
     }
 
-    // 3. Dynamic Payment Processor
+    // 3. Payment Processing
     async function initiatePayment(paymentType) {
         if (!currentUser) {
             showToast("Please log in first to purchase credits.");
@@ -450,6 +457,14 @@
             return;
         }
 
+        // Real-World Safety Check: Validate max file size
+        if (file.size > MAX_FILE_SIZE_BYTES) {
+            showToast(`File size exceeds the ${MAX_FILE_SIZE_MB} MB limit. Please upload a smaller dataset.`);
+            e.target.value = ''; // Reset input
+            document.getElementById('targetSection').classList.add('hidden');
+            return;
+        }
+
         let headers = [];
         const filename = file.name.toLowerCase();
 
@@ -470,7 +485,7 @@
             }
 
             const select = document.getElementById('targetColumn');
-            select.innerHTML = '<option value="" disabled selected>Select a column...</option>'; // Force selection
+            select.innerHTML = '<option value="" disabled selected>Select a column...</option>';
             
             headers.forEach(header => {
                 if (header) {
@@ -497,6 +512,7 @@
         const targetCol = document.getElementById('targetColumn').value;
         
         if (!fileInput) return showToast("Please select a dataset file.");
+        if (fileInput.size > MAX_FILE_SIZE_BYTES) return showToast(`Dataset exceeds maximum size of ${MAX_FILE_SIZE_MB} MB.`);
         if (!targetCol) return showToast("Please select a target column to predict.");
 
         const btn = document.getElementById('trainBtn');
@@ -512,7 +528,7 @@
             const formData = new FormData();
             formData.append('file', fileInput);
 
-            const headers = await getApiHeaders(true); // isFormData = true
+            const headers = await getApiHeaders(true);
 
             const res = await fetch(`${API_BASE_URL}/upload-and-train/?target_column=${targetCol}&user_id=${currentUser.id}`, {
                 method: 'POST',
@@ -587,7 +603,6 @@
             document.getElementById('resultSection').classList.remove('hidden');
             document.getElementById('playgroundSection').classList.remove('hidden');
 
-            // Scroll to results
             document.getElementById('resultSection').scrollIntoView({ behavior: 'smooth', block: 'start' });
 
         } catch (error) {
@@ -632,20 +647,14 @@
             document.getElementById('predictionResult').textContent = data.prediction;
             document.getElementById('predictionOutput').classList.remove('hidden');
 
-            // Scroll to output
             document.getElementById('predictionOutput').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
 
         } catch (error) {
             showToast('Prediction Error: ' + error.message);
         } finally {
-            btn.textContent = "Run Prediction";
+            btn.innerHTML = 'Run Prediction';
             btn.disabled = false;
         }
-    }
-    
-    function toggleOutOfCreditsModal() {
-        const modal = document.getElementById('outOfCreditsModal');
-        if (modal) modal.classList.toggle('hidden');
     }
     </script>
 </body>
