@@ -310,9 +310,9 @@ async def upload_and_train(
         else:
             raise HTTPException(status_code=400, detail="Unsupported file format. Please upload CSV or Excel.")
 
-        # --- ROW COUNT GUARD (Max 100,000 rows) ---
-        if len(df) > 100000:
-            raise HTTPException(status_code=400, detail="Dataset exceeds the maximum limit of 100,000 rows.")
+        # --- ROW COUNT GUARD (Max 600,000 rows) ---
+        if len(df) > 600000:
+            raise HTTPException(status_code=400, detail="Dataset exceeds the maximum limit of 600,000 rows.")
 
         if target_column not in df.columns:
             raise HTTPException(status_code=400, detail=f"Target column '{target_column}' not found in dataset.")
