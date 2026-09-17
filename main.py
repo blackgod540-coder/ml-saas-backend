@@ -296,10 +296,10 @@ async def upload_and_train(
     try:
         content = await file.read()
         
-        # --- FILE SIZE GUARD (Max 15MB to prevent Render RAM crashes) ---
-        MAX_FILE_SIZE = 25 * 1024 * 1024  # 25 MB
+        # --- FILE SIZE GUARD (Max 100MB to prevent Render RAM crashes) ---
+        MAX_FILE_SIZE = 100 * 1024 * 1024  # 100 MB
         if len(content) > MAX_FILE_SIZE:
-            raise HTTPException(status_code=413, detail="File too large. Maximum allowed size is 25MB.")
+            raise HTTPException(status_code=413, detail="File too large. Maximum allowed size is 100MB.")
 
         filename = file.filename.lower()
         
