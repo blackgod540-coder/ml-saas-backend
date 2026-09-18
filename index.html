@@ -475,6 +475,10 @@
                 const firstLine = text.split('\n')[0];
                 headers = firstLine.split(',').map(h => h.trim().replace(/^"|"$/g, ''));
             } else if (filename.endsWith('.xlsx') || filename.endsWith('.xls')) {
+            if (typeof XLSX === 'undefined') {
+    showToast("Excel parser library failed to load. Please disable ad-blockers for this site.");
+    return;
+}
                 const data = await file.arrayBuffer();
                 const workbook = XLSX.read(data, { type: 'array' });
                 const firstSheetName = workbook.SheetNames[0];
