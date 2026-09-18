@@ -1,5 +1,5 @@
 import os
-import shutil
+import gc
 import hmac
 import hashlib
 import json
@@ -28,14 +28,11 @@ from sklearn.impute import SimpleImputer
 from sklearn.preprocessing import OneHotEncoder, StandardScaler
 from sklearn.compose import ColumnTransformer
 from sklearn.pipeline import Pipeline
-from fastapi import FastAPI
-from fastapi.middleware.cors import CORSMiddleware
 
 # --- 1. CONFIGURATION & ENV SETUP ---
 env_path = Path(__file__).parent / ".env"
 load_dotenv(dotenv_path=env_path, override=True)
 
-# Cleaned base URL (stripped /rest/v1/ so Supabase SDK routes correctly)
 RAW_SUPABASE_URL = os.getenv("SUPABASE_URL", "https://vrirjtjhmpgydrhqpcib.supabase.co")
 SUPABASE_URL = RAW_SUPABASE_URL.split("/rest/v1")[0].rstrip("/")
 
@@ -49,7 +46,6 @@ PAYSTACK_SECRET_KEY = os.getenv(
     "sk_test_f85c7c33012e50b93ea8ee74f96731d593b2007e"
 )
 
-# Initialize Supabase client
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
 supabase_admin: Client = create_client(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
 
@@ -67,7 +63,6 @@ origins = [
     "http://localhost:8000"
 ]
 
-# Enable CORS for cross-origin frontend requests
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -83,7 +78,7 @@ api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
 class PaymentInitRequest(BaseModel):
     user_id: str
     email: EmailStr
-    payment_type: str  # "credit_pack" or "pro_subscription"
+    payment_type: str
 
 class PredictionRequest(BaseModel):
     input_data: dict
@@ -91,19 +86,15 @@ class PredictionRequest(BaseModel):
 
 # --- 3. AUTHENTICATION ---
 async def verify_api_key(api_key: str = Security(api_key_header)):
-    """Validates API key with a fallback test user ID."""
     print(f"\n-> [AUTH] Verifying API Key: {repr(api_key)}")
-    
     if not api_key:
         api_key = "my_secret_test_key_123"
-    
     try:
         res = supabase.rpc("get_user_id_by_key", {"p_key": api_key}).execute()
         user_id = res.data
         if user_id:
             print(f"-> [AUTH SUCCESS] Authenticated Real User ID: {user_id}")
             return {"user_id": user_id}
-            
     except Exception as e:
         print(f"-> [WARNING] RPC validation bypassed: {str(e)}")
     
@@ -121,7 +112,6 @@ def read_root():
 # --- 5. PAYSTACK BILLING ROUTES ---
 @app.post("/pay/initialize")
 def initialize_payment(payload: PaymentInitRequest):
-    """Initializes a Paystack transaction for credit purchase or subscription."""
     if not PAYSTACK_SECRET_KEY:
         raise HTTPException(status_code=500, detail="Paystack secret key not configured")
 
@@ -131,7 +121,7 @@ def initialize_payment(payload: PaymentInitRequest):
     }
 
     if payload.payment_type == "credit_pack":
-        amount_kobo = 5000 * 100  # ₦5,000 for 10 credits
+        amount_kobo = 5000 * 100
         metadata = {"user_id": payload.user_id, "payment_type": "credit_pack", "credits_to_add": 10}
         data = {
             "email": payload.email,
@@ -141,7 +131,7 @@ def initialize_payment(payload: PaymentInitRequest):
     elif payload.payment_type == "pro_subscription":
         data = {
             "email": payload.email,
-            "amount": 15000 * 100,  # ₦15,000/month
+            "amount": 15000 * 100,
             "plan": "PLN_tlessu0cswidxs5",  
             "metadata": {"user_id": payload.user_id, "payment_type": "pro_subscription"}
         }
@@ -156,12 +146,9 @@ def initialize_payment(payload: PaymentInitRequest):
 
     return res_data["data"]
 
-
 @app.post("/webhook/paystack")
 async def paystack_webhook(request: Request, x_paystack_signature: str = Header(None)):
-    """Listens for background payment confirmations and recurring charges."""
     body = await request.body()
-
     computed_signature = hmac.new(
         PAYSTACK_SECRET_KEY.encode('utf-8'),
         body,
@@ -176,21 +163,18 @@ async def paystack_webhook(request: Request, x_paystack_signature: str = Header(
     data = event_data.get("data", {})
     reference = data.get("reference")
     
-    # --- WEBHOOK REPLAY GUARD ---
     if reference:
         tx_check = supabase.table("transactions").select("reference").eq("reference", reference).execute()
         if len(tx_check.data) > 0:
             print(f"-> [WEBHOOK] Transaction {reference} already processed. Ignoring replay attack.")
             return {"status": "success", "message": "already_processed"}
 
-    # Handle Successful Charges (Initial and Recurring)
     if event_type == "charge.success":
         metadata = data.get("metadata", {})
         user_id = metadata.get("user_id")
 
         if user_id:
             payment_type = metadata.get("payment_type")
-            
             profile_res = supabase.table("profiles").select("*").eq("id", user_id).execute()
             profile_exists = len(profile_res.data) > 0
             current_credits = profile_res.data[0].get("credits", 0) if profile_exists else 0
@@ -200,62 +184,32 @@ async def paystack_webhook(request: Request, x_paystack_signature: str = Header(
                 new_credits = current_credits + credits_to_add
                 
                 if profile_exists:
-                    supabase.table("profiles").update({
-                        "credits": new_credits,
-                        "plan_type": "free"
-                    }).eq("id", user_id).execute()
+                    supabase.table("profiles").update({"credits": new_credits, "plan_type": "free"}).eq("id", user_id).execute()
                 else:
-                    supabase.table("profiles").insert({
-                        "id": user_id, 
-                        "credits": new_credits,
-                        "plan_type": "free"
-                    }).execute()
+                    supabase.table("profiles").insert({"id": user_id, "credits": new_credits, "plan_type": "free"}).execute()
 
             elif payment_type == "pro_subscription":
                 expiry_date = (datetime.now(timezone.utc) + timedelta(days=30)).isoformat()
-                
                 if profile_exists:
-                    supabase.table("profiles").update({
-                        "plan_type": "pro_subscriber",
-                        "subscription_expires_at": expiry_date
-                    }).eq("id", user_id).execute()
+                    supabase.table("profiles").update({"plan_type": "pro_subscriber", "subscription_expires_at": expiry_date}).eq("id", user_id).execute()
                 else:
-                    supabase.table("profiles").insert({
-                        "id": user_id,
-                        "credits": current_credits,
-                        "plan_type": "pro_subscriber",
-                        "subscription_expires_at": expiry_date
-                    }).execute()
+                    supabase.table("profiles").insert({"id": user_id, "credits": current_credits, "plan_type": "pro_subscriber", "subscription_expires_at": expiry_date}).execute()
 
-            # Log the transaction to prevent future replay attacks
             if reference:
-                supabase.table("transactions").insert({
-                    "reference": reference,
-                    "user_id": user_id,
-                    "event_type": event_type
-                }).execute()
+                supabase.table("transactions").insert({"reference": reference, "user_id": user_id, "event_type": event_type}).execute()
 
-    # Handle Failed Recurring Subscriptions
     elif event_type in ["invoice.payment_failed", "subscription.disable", "charge.failed"]:
         metadata = data.get("metadata", {})
         user_id = metadata.get("user_id")
-        
         if user_id:
-            supabase.table("profiles").update({
-                "plan_type": "free"
-            }).eq("id", user_id).execute()
-            
+            supabase.table("profiles").update({"plan_type": "free"}).eq("id", user_id).execute()
             if reference:
-                supabase.table("transactions").insert({
-                    "reference": reference,
-                    "user_id": user_id,
-                    "event_type": event_type
-                }).execute()
+                supabase.table("transactions").insert({"reference": reference, "user_id": user_id, "event_type": event_type}).execute()
 
     return {"status": "success"}
 
 
-# --- 6. CORE ML ROUTE (WITH ATOMIC CREDIT DEDUCTION) ---
+# --- 6. CORE ML ROUTE (WITH PERFORMANCE OPTIMIZATIONS) ---
 @app.post("/upload-and-train/")
 async def upload_and_train(
     file: UploadFile = File(...),
@@ -281,7 +235,6 @@ async def upload_and_train(
     plan_type = user_profile.get("plan_type", "free")
     expires_at_str = user_profile.get("subscription_expires_at")
 
-    # --- TIME-LOCK VALIDATION ---
     if plan_type == "pro_subscriber":
         is_expired = True
         if expires_at_str:
@@ -296,9 +249,7 @@ async def upload_and_train(
             plan_type = "free"
             supabase.table("profiles").update({"plan_type": "free"}).eq("id", user_id).execute()
 
-    # --- ATOMIC CREDIT DEDUCTION (RPC) ---
     if plan_type != "pro_subscriber":
-        # Let Postgres handle the credit check and deduction atomically to prevent race conditions
         deduction_res = supabase.rpc("decrement_credits", {"user_id_param": user_id}).execute()
         if not deduction_res.data:
             raise HTTPException(status_code=402, detail="Insufficient credits. Please purchase a credit pack or upgrade.")
@@ -306,10 +257,10 @@ async def upload_and_train(
     try:
         content = await file.read()
         
-        # --- FILE SIZE GUARD (Max 100MB to prevent Render RAM crashes) ---
-        MAX_FILE_SIZE = 100 * 1024 * 1024  # 100 MB
+        # Max file size restricted to 30MB to prevent Render RAM crashes
+        MAX_FILE_SIZE = 30 * 1024 * 1024  
         if len(content) > MAX_FILE_SIZE:
-            raise HTTPException(status_code=413, detail="File too large. Maximum allowed size is 100MB.")
+            raise HTTPException(status_code=413, detail="File too large for Render's free tier memory. Maximum allowed size is 30MB.")
 
         filename = file.filename.lower()
         
@@ -320,14 +271,26 @@ async def upload_and_train(
         else:
             raise HTTPException(status_code=400, detail="Unsupported file format. Please upload CSV or Excel.")
 
-        # --- ROW COUNT GUARD (Max 600,000 rows) ---
-        if len(df) > 600000:
-            raise HTTPException(status_code=400, detail="Dataset exceeds the maximum limit of 600,000 rows.")
+        # IMMEDIATE MEMORY FREE: Clear the raw binary file from memory after Pandas reads it
+        del content
+        gc.collect()
 
         if target_column not in df.columns:
             raise HTTPException(status_code=400, detail=f"Target column '{target_column}' not found in dataset.")
 
         df = df.dropna(subset=[target_column])
+
+        # PERFORMANCE OPTIMIZATION 1: Row Downsampling
+        # Limits rows to 15,000 to drastically reduce fitting time and RAM usage
+        if len(df) > 15000:
+            df = df.sample(n=15000, random_state=42)
+
+        # PERFORMANCE OPTIMIZATION 2: Memory Downcasting
+        # Halves the memory weight of numerical columns prior to training
+        for col in df.select_dtypes(include=['float64']).columns:
+            df[col] = df[col].astype('float32')
+        for col in df.select_dtypes(include=['int64']).columns:
+            df[col] = df[col].astype('int32')
 
         X = df.drop(columns=[target_column])
         y = df[target_column]
@@ -343,7 +306,7 @@ async def upload_and_train(
 
         X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
 
-        numeric_cols = X.select_dtypes(include=['int64', 'float64', 'int32', 'float32']).columns.tolist()
+        numeric_cols = X.select_dtypes(include=['int32', 'float32']).columns.tolist()
         categorical_cols = X.select_dtypes(include=['object', 'category', 'bool']).columns.tolist()
 
         numeric_transformer = Pipeline(steps=[
@@ -362,11 +325,13 @@ async def upload_and_train(
                 ('cat', categorical_transformer, categorical_cols)
             ])
 
+        # PERFORMANCE OPTIMIZATION 3: Constrained Tree Growth
+        # Caps the model at 40 trees and limits depth to prevent indefinite processing times
         if is_classification:
-            model = RandomForestClassifier(random_state=42)
+            model = RandomForestClassifier(n_estimators=40, max_depth=12, n_jobs=-1, random_state=42)
             model_type = "classification"
         else:
-            model = RandomForestRegressor(random_state=42)
+            model = RandomForestRegressor(n_estimators=40, max_depth=12, n_jobs=-1, random_state=42)
             model_type = "regression"
 
         pipeline = Pipeline(steps=[('preprocessor', preprocessor), ('model', model)])
@@ -404,7 +369,6 @@ async def upload_and_train(
         model_path = os.path.join("models", f"{model_id}.joblib")
         joblib.dump(pipeline, model_path)
 
-        # --- BACKUP MODEL TO SUPABASE STORAGE ---
         try:
             with open(model_path, "rb") as f_model:
                 supabase.storage.from_("models").upload(
@@ -434,7 +398,6 @@ async def upload_and_train(
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"Training error: {str(e)}")
 
-
 @app.post("/predict/{model_id}")
 async def predict_model(model_id: str, payload: PredictionRequest):
     model_path = os.path.join("models", f"{model_id}.joblib")
@@ -461,7 +424,6 @@ async def predict_model(model_id: str, payload: PredictionRequest):
     except Exception as e:
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
-
 
 @app.get("/download-model/{model_id}")
 async def download_model(model_id: str):
