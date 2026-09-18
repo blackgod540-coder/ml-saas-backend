@@ -65,7 +65,7 @@ origins = [
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=origins,  # <-- UPDATED: Now uses the explicit list instead of ["*"]
+    allow_origins=origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -209,7 +209,7 @@ async def paystack_webhook(request: Request, x_paystack_signature: str = Header(
     return {"status": "success"}
 
 
-# --- 6. CORE ML ROUTE (WITH PERFORMANCE OPTIMIZATIONS) ---
+# --- 6. CORE ML ROUTE (STREAMED DISK INGESTION FOR LARGE CSVs) ---
 @app.post("/upload-and-train/")
 async def upload_and_train(
     file: UploadFile = File(...),
@@ -255,25 +255,23 @@ async def upload_and_train(
             raise HTTPException(status_code=402, detail="Insufficient credits. Please purchase a credit pack or upgrade.")
 
     try:
-        content = await file.read()
-        
-        # Max file size restricted to 30MB to prevent Render RAM crashes
-        MAX_FILE_SIZE = 30 * 1024 * 1024  
-        if len(content) > MAX_FILE_SIZE:
-            raise HTTPException(status_code=413, detail="File too large for Render's free tier memory. Maximum allowed size is 30MB.")
+        # File limit updated to 100MB
+        MAX_FILE_SIZE = 100 * 1024 * 1024  
+        if file.size and file.size > MAX_FILE_SIZE:
+            raise HTTPException(status_code=413, detail="File too large. Maximum allowed size is 100MB.")
 
         filename = file.filename.lower()
         
+        # STREAM DIRECTLY FROM DISK (Bypasses active RAM duplication)
         if filename.endswith('.csv'):
-            df = pd.read_csv(io.BytesIO(content))
+            df = pd.read_csv(file.file)
         elif filename.endswith(('.xlsx', '.xls')):
-            df = pd.read_excel(io.BytesIO(content))
+            df = pd.read_excel(file.file)
         else:
-            # <-- UPDATED: Custom error message for unsupported files
             raise HTTPException(status_code=400, detail="Convert to csv before upload that would be better")
 
-        # IMMEDIATE MEMORY FREE: Clear the raw binary file from memory after Pandas reads it
-        del content
+        # Clean up the spooled temp file descriptor immediately
+        file.file.close()
         gc.collect()
 
         if target_column not in df.columns:
@@ -282,12 +280,12 @@ async def upload_and_train(
         df = df.dropna(subset=[target_column])
 
         # PERFORMANCE OPTIMIZATION 1: Row Downsampling
-        # Limits rows to 15,000 to drastically reduce fitting time and RAM usage
+        # Slices large datasets down to 15,000 rows to ensure training fits within Render's 512MB RAM limit
         if len(df) > 15000:
             df = df.sample(n=15000, random_state=42)
 
         # PERFORMANCE OPTIMIZATION 2: Memory Downcasting
-        # Halves the memory weight of numerical columns prior to training
+        # Halves memory weight of numerical columns prior to pipeline processing
         for col in df.select_dtypes(include=['float64']).columns:
             df[col] = df[col].astype('float32')
         for col in df.select_dtypes(include=['int64']).columns:
@@ -327,7 +325,6 @@ async def upload_and_train(
             ])
 
         # PERFORMANCE OPTIMIZATION 3: Constrained Tree Growth
-        # Caps the model at 40 trees and limits depth to prevent indefinite processing times
         if is_classification:
             model = RandomForestClassifier(n_estimators=40, max_depth=12, n_jobs=-1, random_state=42)
             model_type = "classification"
