@@ -65,7 +65,7 @@ origins = [
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=origins,  # <-- UPDATED: Now uses the explicit list instead of ["*"]
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -269,7 +269,8 @@ async def upload_and_train(
         elif filename.endswith(('.xlsx', '.xls')):
             df = pd.read_excel(io.BytesIO(content))
         else:
-            raise HTTPException(status_code=400, detail="Unsupported file format. Please upload CSV or Excel.")
+            # <-- UPDATED: Custom error message for unsupported files
+            raise HTTPException(status_code=400, detail="Convert to csv before upload that would be better")
 
         # IMMEDIATE MEMORY FREE: Clear the raw binary file from memory after Pandas reads it
         del content
