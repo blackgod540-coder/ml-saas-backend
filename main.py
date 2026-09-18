@@ -3,7 +3,6 @@ import gc
 import hmac
 import hashlib
 import json
-import io
 import uuid
 import requests
 import traceback
@@ -13,7 +12,7 @@ import numpy as np
 from pathlib import Path
 from datetime import datetime, timedelta, timezone
 
-from fastapi import FastAPI, UploadFile, File, Query, Depends, HTTPException, Security, Request, Header
+from fastapi import FastAPI, UploadFile, File, Query, HTTPException, Security, Request, Header
 from fastapi.responses import FileResponse
 from fastapi.security.api_key import APIKeyHeader
 from fastapi.middleware.cors import CORSMiddleware
@@ -21,13 +20,7 @@ from pydantic import BaseModel, EmailStr
 from dotenv import load_dotenv
 from supabase import create_client, Client
 
-from sklearn.model_selection import train_test_split
-from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor
-from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, r2_score, mean_squared_error, mean_absolute_error
-from sklearn.impute import SimpleImputer
-from sklearn.preprocessing import OneHotEncoder, StandardScaler
-from sklearn.compose import ColumnTransformer
-from sklearn.pipeline import Pipeline
+from engine import MLEngine
 
 # --- 1. CONFIGURATION & ENV SETUP ---
 env_path = Path(__file__).parent / ".env"
@@ -54,6 +47,9 @@ app = FastAPI(
     description="Backend API for automated machine learning training, Supabase logging, and billing.",
     version="1.0.0"
 )
+
+MODELS_DIR = "saved_models"
+os.makedirs(MODELS_DIR, exist_ok=True)
 
 # --- CORS CONFIGURATION ---
 origins = [
@@ -209,7 +205,7 @@ async def paystack_webhook(request: Request, x_paystack_signature: str = Header(
     return {"status": "success"}
 
 
-# --- 6. CORE ML ROUTE (STREAMED DISK INGESTION FOR LARGE CSVs) ---
+# --- 6. CORE ML ROUTE (DELEGATED TO MLEngine) ---
 @app.post("/upload-and-train/")
 async def upload_and_train(
     file: UploadFile = File(...),
@@ -255,117 +251,32 @@ async def upload_and_train(
             raise HTTPException(status_code=402, detail="Insufficient credits. Please purchase a credit pack or upgrade.")
 
     try:
-        # File limit updated to 100MB
         MAX_FILE_SIZE = 100 * 1024 * 1024  
         if file.size and file.size > MAX_FILE_SIZE:
             raise HTTPException(status_code=413, detail="File too large. Maximum allowed size is 100MB.")
 
         filename = file.filename.lower()
         
-        # STREAM DIRECTLY FROM DISK (Bypasses active RAM duplication)
         if filename.endswith('.csv'):
             df = pd.read_csv(file.file)
         elif filename.endswith(('.xlsx', '.xls')):
             df = pd.read_excel(file.file)
         else:
-            raise HTTPException(status_code=400, detail="Convert to csv before upload that would be better")
+            raise HTTPException(status_code=400, detail="Unsupported file format. Please upload a CSV or Excel file.")
 
-        # Clean up the spooled temp file descriptor immediately
         file.file.close()
         gc.collect()
 
         if target_column not in df.columns:
             raise HTTPException(status_code=400, detail=f"Target column '{target_column}' not found in dataset.")
 
-        df = df.dropna(subset=[target_column])
-
-        # PERFORMANCE OPTIMIZATION 1: Row Downsampling
-        # Slices large datasets down to 15,000 rows to ensure training fits within Render's 512MB RAM limit
-        if len(df) > 15000:
-            df = df.sample(n=15000, random_state=42)
-
-        # PERFORMANCE OPTIMIZATION 2: Memory Downcasting
-        # Halves memory weight of numerical columns prior to pipeline processing
-        for col in df.select_dtypes(include=['float64']).columns:
-            df[col] = df[col].astype('float32')
-        for col in df.select_dtypes(include=['int64']).columns:
-            df[col] = df[col].astype('int32')
-
-        X = df.drop(columns=[target_column])
-        y = df[target_column]
-
-        X = X.loc[:, X.nunique() > 1]
-        if X.empty:
-            raise HTTPException(status_code=400, detail="Dataset has no valid feature columns remaining after filtering.")
-
-        is_classification = True
-        if pd.api.types.is_numeric_dtype(y):
-            if y.nunique() > 20:
-                is_classification = False
-
-        X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
-
-        numeric_cols = X.select_dtypes(include=['int32', 'float32']).columns.tolist()
-        categorical_cols = X.select_dtypes(include=['object', 'category', 'bool']).columns.tolist()
-
-        numeric_transformer = Pipeline(steps=[
-            ('imputer', SimpleImputer(strategy='median')),
-            ('scaler', StandardScaler())
-        ])
-
-        categorical_transformer = Pipeline(steps=[
-            ('imputer', SimpleImputer(strategy='constant', fill_value='missing')),
-            ('onehot', OneHotEncoder(handle_unknown='ignore', sparse_output=False))
-        ])
-
-        preprocessor = ColumnTransformer(
-            transformers=[
-                ('num', numeric_transformer, numeric_cols),
-                ('cat', categorical_transformer, categorical_cols)
-            ])
-
-        # PERFORMANCE OPTIMIZATION 3: Constrained Tree Growth
-        if is_classification:
-            model = RandomForestClassifier(n_estimators=40, max_depth=12, n_jobs=-1, random_state=42)
-            model_type = "classification"
-        else:
-            model = RandomForestRegressor(n_estimators=40, max_depth=12, n_jobs=-1, random_state=42)
-            model_type = "regression"
-
-        pipeline = Pipeline(steps=[('preprocessor', preprocessor), ('model', model)])
-        pipeline.fit(X_train, y_train)
-
-        y_pred = pipeline.predict(X_test)
-
-        if is_classification:
-            avg_type = 'binary' if y.nunique() == 2 else 'weighted'
-            performance_metrics = {
-                "accuracy": round(float(accuracy_score(y_test, y_pred)), 4),
-                "precision": round(float(precision_score(y_test, y_pred, average=avg_type, zero_division=0)), 4),
-                "recall": round(float(recall_score(y_test, y_pred, average=avg_type, zero_division=0)), 4),
-                "f1_score": round(float(f1_score(y_test, y_pred, average=avg_type, zero_division=0)), 4)
-            }
-        else:
-            performance_metrics = {
-                "r2_score": round(float(r2_score(y_test, y_pred)), 4),
-                "rmse": round(float(np.sqrt(mean_squared_error(y_test, y_pred))), 4),
-                "mae": round(float(mean_absolute_error(y_test, y_pred)), 4)
-            }
-
-        feature_defaults = {}
-        categorical_options = {}
-        for col in X.columns:
-            if col in numeric_cols:
-                feature_defaults[col] = float(X[col].median()) if not X[col].empty else 0.0
-            else:
-                top_val = str(X[col].mode()[0]) if not X[col].mode().empty else "missing"
-                feature_defaults[col] = top_val
-                categorical_options[col] = X[col].dropna().astype(str).unique().tolist()[:50]
-
         model_id = f"mod_{uuid.uuid4().hex[:10]}"
-        os.makedirs("models", exist_ok=True)
-        model_path = os.path.join("models", f"{model_id}.joblib")
-        joblib.dump(pipeline, model_path)
+        
+        # Instantiate and run MLEngine from engine.py
+        engine = MLEngine(df=df, target_column=target_column)
+        training_result = engine.train_and_save(model_id=model_id)
+
+        model_path = os.path.join(MODELS_DIR, f"{model_id}.joblib")
 
         try:
             with open(model_path, "rb") as f_model:
@@ -380,14 +291,7 @@ async def upload_and_train(
 
         return {
             "status": "success",
-            "details": {
-                "model_id": model_id,
-                "model_type": model_type,
-                "features_used": list(X.columns),
-                "performance_metrics": performance_metrics,
-                "feature_defaults": feature_defaults,
-                "categorical_options": categorical_options
-            }
+            "details": training_result
         }
 
     except HTTPException:
@@ -398,24 +302,53 @@ async def upload_and_train(
 
 @app.post("/predict/{model_id}")
 async def predict_model(model_id: str, payload: PredictionRequest):
-    model_path = os.path.join("models", f"{model_id}.joblib")
+    model_path = os.path.join(MODELS_DIR, f"{model_id}.joblib")
     
     if not os.path.exists(model_path):
         try:
             print(f"-> [STORAGE] Model {model_id} missing locally. Downloading from Supabase Storage...")
             file_bytes = supabase.storage.from_("models").download(f"{model_id}.joblib")
-            os.makedirs("models", exist_ok=True)
+            os.makedirs(MODELS_DIR, exist_ok=True)
             with open(model_path, "wb") as f_out:
                 f_out.write(file_bytes)
         except Exception as e:
             raise HTTPException(status_code=404, detail="Model not found or expired in cloud storage.")
 
     try:
-        loaded_pipeline = joblib.load(model_path)
+        artifacts = joblib.load(model_path)
+        model = artifacts["model"]
+        model_type = artifacts["model_type"]
+        features = artifacts["features"]
+        label_encoders = artifacts["label_encoders"]
+        feature_defaults = artifacts["feature_defaults"]
+        target_column = artifacts["target_column"]
+
         input_df = pd.DataFrame([payload.input_data])
-        prediction = loaded_pipeline.predict(input_df)[0]
+
+        # Preprocess input matching MLEngine's encoding standards
+        for col in features:
+            if col not in input_df.columns:
+                input_df[col] = feature_defaults.get(col, 0)
+            
+            if col in label_encoders:
+                le = label_encoders[col]
+                val = str(input_df[col].iloc[0])
+                if val in le.classes_:
+                    input_df[col] = le.transform([val])[0]
+                else:
+                    # Fallback to default class index if unseen category appears
+                    input_df[col] = le.transform([le.classes_[0]])[0]
+            else:
+                input_df[col] = pd.to_numeric(input_df[col], errors='coerce').fillna(feature_defaults.get(col, 0.0))
+
+        input_df = input_df[features]
+        prediction = model.predict(input_df)[0]
         
-        if isinstance(prediction, (np.integer, np.floating)):
+        # Inverse transform encoded classification target back to string labels if applicable
+        if model_type == "classification" and target_column in label_encoders:
+            target_le = label_encoders[target_column]
+            prediction = target_le.inverse_transform([int(prediction)])[0]
+        elif isinstance(prediction, (np.integer, np.floating)):
             prediction = prediction.item()
             
         return {"prediction": prediction}
@@ -425,13 +358,13 @@ async def predict_model(model_id: str, payload: PredictionRequest):
 
 @app.get("/download-model/{model_id}")
 async def download_model(model_id: str):
-    model_path = os.path.join("models", f"{model_id}.joblib")
+    model_path = os.path.join(MODELS_DIR, f"{model_id}.joblib")
     
     if not os.path.exists(model_path):
         try:
             print(f"-> [STORAGE] Model {model_id} missing locally for download. Fetching from Supabase...")
             file_bytes = supabase.storage.from_("models").download(f"{model_id}.joblib")
-            os.makedirs("models", exist_ok=True)
+            os.makedirs(MODELS_DIR, exist_ok=True)
             with open(model_path, "wb") as f_out:
                 f_out.write(file_bytes)
         except Exception as e:
