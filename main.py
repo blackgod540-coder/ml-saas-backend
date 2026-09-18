@@ -28,6 +28,8 @@ from sklearn.impute import SimpleImputer
 from sklearn.preprocessing import OneHotEncoder, StandardScaler
 from sklearn.compose import ColumnTransformer
 from sklearn.pipeline import Pipeline
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 
 # --- 1. CONFIGURATION & ENV SETUP ---
 env_path = Path(__file__).parent / ".env"
@@ -56,6 +58,14 @@ app = FastAPI(
     description="Backend API for automated machine learning training, Supabase logging, and billing.",
     version="1.0.0"
 )
+
+# --- CORS CONFIGURATION ---
+origins = [
+    "https://nocode-ai.netlify.app",
+    "http://localhost:3000",
+    "http://127.0.0.1:5500",
+    "http://localhost:8000"
+]
 
 # Enable CORS for cross-origin frontend requests
 app.add_middleware(
