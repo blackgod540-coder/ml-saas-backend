@@ -8,6 +8,18 @@
     <!-- SheetJS via Cloudflare CDN -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+
+
+    <!-- Social Preview Meta Tags -->
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://nocode-ai.netlify.app">
+<meta property="og:title" content="No-Code Machine Learning Dashboard">
+<meta property="og:description" content="Upload CSV datasets, train production-grade models in seconds, and export .joblib files with zero code.">
+<meta property="og:image" content="https://nocode-ai.netlify.app/preview-banner.png">
+
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="No-Code Machine Learning Dashboard">
+<meta name="twitter:description" content="Upload CSV datasets, train production-grade models in seconds, and export .joblib files with zero code.">
 </head>
 <body class="bg-gray-50 min-h-screen p-6 font-sans">
     
@@ -170,7 +182,7 @@
         </div>
 
         <!-- Step 3: In-Browser Prediction Playground -->
-        <div id="playgroundSection" class="hidden bg-white p-6 rounded-2xl shadow-sm border border-gray-200 space-y-6">
+        <div id="playgroundSection" class="hidden bg-white p-6 rounded-2xl shadow-sm border border-gray-200 space-y-6"> 
             <h2 class="text-xl font-bold text-gray-900 border-b border-gray-100 pb-4 flex items-center gap-2">
                 <span class="bg-blue-100 text-blue-700 w-6 h-6 rounded-full flex items-center justify-center text-sm">3</span>
                 Test Model Predictions Live
@@ -191,6 +203,29 @@
                 <span id="predictionResult" class="text-3xl font-black text-emerald-900 tracking-tight"></span>
             </div>
         </div>
+        <!-- Developer Code Integration Section -->
+<div class="bg-gray-900 text-white p-6 rounded-2xl shadow-lg border border-gray-800 space-y-4">
+    <div class="flex justify-between items-center border-b border-gray-800 pb-3">
+        <div>
+            <h3 class="text-lg font-bold">Deploy Your Exported Model in 3 Lines of Python</h3>
+            <p class="text-xs text-gray-400">Zero platform lock-in. Run predictions on your own server or AWS/Render backend.</p>
+        </div>
+        <span class="text-xs font-mono bg-blue-900/50 text-blue-300 px-3 py-1 rounded-full border border-blue-700/50">Python 3.9+</span>
+    </div>
+
+    <pre class="bg-gray-950 p-4 rounded-xl text-xs md:text-sm font-mono text-emerald-400 overflow-x-auto leading-relaxed border border-gray-800">
+<span class="text-purple-400">import</span> joblib
+<span class="text-purple-400">import</span> pandas <span class="text-purple-400">as</span> pd
+
+<span class="text-gray-500"># 1. Load your downloaded .joblib model</span>
+model = joblib.load(<span class="text-amber-300">"model.joblib"</span>)
+
+<span class="text-gray-500"># 2. Run instant predictions on new data</span>
+new_data = pd.DataFrame([{<span class="text-amber-300">"age"</span>: <span class="text-orange-300">29</span>, <span class="text-amber-300">"income"</span>: <span class="text-orange-300">65000</span>}])
+prediction = model.predict(new_data)
+
+<span class="text-purple-400">print</span>(<span class="text-amber-300">f"Predicted Result: {prediction[0]}"</span>)</pre>
+</div>
 
     </div>
 
