@@ -257,15 +257,38 @@ async def upload_and_train(
 
         filename = file.filename.lower()
         
-        if filename.endswith('.csv'):
-            df = pd.read_csv(file.file)
-        elif filename.endswith(('.xlsx', '.xls')):
-            df = pd.read_excel(file.file)
-        else:
-            raise HTTPException(status_code=400, detail="Unsupported file format. Please upload a CSV or Excel file.")
+        # 1. ENFORCE CSV ONLY
+        if not filename.endswith('.csv'):
+            raise HTTPException(status_code=400, detail="For system stability, only .csv files are supported. Please convert your dataset to CSV.")
 
+        # 2. MEMORY-SAFE INGESTION (Chunking & On-the-fly Sampling)
+        chunk_list = []
+        max_rows_target = 20000 
+        current_rows = 0
+        
+        # Read the file in small 10,000-row chunks so RAM never spikes
+        for chunk in pd.read_csv(file.file, chunksize=10000, low_memory=True):
+            # Sample down large chunks immediately before storing them
+            if len(chunk) > 2000:
+                chunk = chunk.sample(frac=0.5, random_state=42)
+                
+            chunk_list.append(chunk)
+            current_rows += len(chunk)
+            
+            # Cap the maximum rows loaded into the engine to prevent ML training OOM
+            if current_rows >= max_rows_target:
+                break
+                
+        df = pd.concat(chunk_list, ignore_index=True)
+        
         file.file.close()
-        gc.collect()
+        gc.collect() # Force garbage collection immediately
+
+        # 3. MEMORY DOWNCASTING (Halves the final RAM footprint)
+        for col in df.select_dtypes(include=['float64']).columns:
+            df[col] = df[col].astype('float32')
+        for col in df.select_dtypes(include=['int64']).columns:
+            df[col] = df[col].astype('int32')
 
         if target_column not in df.columns:
             raise HTTPException(status_code=400, detail=f"Target column '{target_column}' not found in dataset.")
