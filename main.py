@@ -130,7 +130,7 @@ def initialize_payment(payload: PaymentInitRequest):
         data = {
             "email": payload.email,
             "amount": 15000 * 100,
-            "plan": "PLN_tlessu0cswidxs5",  
+            "plan": os.getenv("PAYSTACK_PLAN_ID"),  # <--- Replaced hardcoded string
             "metadata": {"user_id": payload.user_id, "payment_type": "pro_subscription"}
         }
     else:
