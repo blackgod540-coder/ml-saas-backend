@@ -646,8 +646,16 @@ prediction = model.predict(new_data)
 
     async function runPrediction() {
         const btn = document.getElementById('predictBtn');
+        const outputContainer = document.getElementById('predictionOutput');
+        const resultDisplay = document.getElementById('predictionResult');
+        
         try {
             if (!currentModelId) throw new Error("No active model found. Please train a model first.");
+
+            // 1. Instantly clear old predictions so ghost numbers don't stick around on errors
+            outputContainer.classList.add('hidden');
+            outputContainer.classList.remove('flex');
+            resultDisplay.textContent = '';
 
             btn.innerHTML = `<span class="inline-block animate-spin rounded-full h-4 w-4 border-2 border-white border-t-transparent mr-2 align-middle"></span> Calculating...`;
             btn.disabled = true;
@@ -664,7 +672,7 @@ prediction = model.predict(new_data)
             
             const headers = await getApiHeaders();
             
-            // Send exactly what the API asked for: a single dictionary
+            // 2. Strict single dictionary payload with no fallback loops
             const res = await fetch(`${API_BASE_URL}/predict/${currentModelId}`, {
                 method: 'POST',
                 headers: headers,
@@ -676,8 +684,9 @@ prediction = model.predict(new_data)
                 try {
                     errData = await res.json();
                 } catch (e) {
-                    errData = { detail: `Server error: ${res.status} ${res.statusText}` };
+                    errData = { detail: `Backend Error: ${res.status} ${res.statusText}` };
                 }
+                // 3. This will now show the REAL error the model is throwing
                 throw new Error(formatErrorMessage(errData));
             }
 
