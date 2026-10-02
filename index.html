@@ -663,10 +663,12 @@ prediction = model.predict(new_data)
             });
             
             const headers = await getApiHeaders();
+            
+            // Updated payload to match backend schema requirements (input_data)
             const res = await fetch(`${API_BASE_URL}/predict/${currentModelId}`, {
                 method: 'POST',
                 headers: headers,
-                body: JSON.stringify({ data: [inputData] })
+                body: JSON.stringify({ input_data: [inputData] })
             });
 
             if (!res.ok) {
@@ -677,12 +679,12 @@ prediction = model.predict(new_data)
                     errData = { detail: `Server error: ${res.status} ${res.statusText}` };
                 }
 
-                // If backend expects direct dict instead of { data: [...] }
+                // Fallback: If backend expects a single dictionary instead of a list of dictionaries
                 if (res.status === 422) {
                     const fallbackRes = await fetch(`${API_BASE_URL}/predict/${currentModelId}`, {
                         method: 'POST',
                         headers: headers,
-                        body: JSON.stringify(inputData)
+                        body: JSON.stringify({ input_data: inputData })
                     });
                     if (fallbackRes.ok) {
                         const fbData = await fallbackRes.json();
