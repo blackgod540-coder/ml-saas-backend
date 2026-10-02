@@ -237,11 +237,28 @@ prediction = model.predict(new_data)
     let modelFeatures = [];
     let currentUser = null;
     let isSignUpMode = false;
+
+    function formatErrorMessage(errorObj) {
+        if (!errorObj) return 'An unexpected error occurred.';
+        if (typeof errorObj === 'string') return errorObj;
+        
+        if (errorObj.detail) {
+            if (typeof errorObj.detail === 'string') return errorObj.detail;
+            if (Array.isArray(errorObj.detail)) {
+                return errorObj.detail.map(e => `${e.loc ? e.loc.join('.') + ': ' : ''}${e.msg || JSON.stringify(e)}`).join(' | ');
+            }
+            if (typeof errorObj.detail === 'object') return JSON.stringify(errorObj.detail);
+        }
+
+        if (errorObj.message) return errorObj.message;
+        return JSON.stringify(errorObj);
+    }
     
     function showToast(message, type = 'error') {
         const container = document.getElementById('toastContainer');
         const toast = document.createElement('div');
         const isError = type === 'error';
+        const displayMsg = typeof message === 'object' ? formatErrorMessage(message) : message;
         
         toast.className = `transform transition-all duration-300 translate-y-2 opacity-0 max-w-sm w-full bg-white shadow-xl rounded-xl border-l-4 p-4 flex items-start gap-3 ${isError ? 'border-red-500' : 'border-emerald-500'}`;
         
@@ -249,7 +266,7 @@ prediction = model.predict(new_data)
             <div class="flex-shrink-0 mt-0.5">
                 ${isError ? '🔴' : '✅'}
             </div>
-            <div class="flex-1 text-sm font-medium text-gray-800">${message}</div>
+            <div class="flex-1 text-sm font-medium text-gray-800 break-words">${displayMsg}</div>
             <button onclick="this.parentElement.remove()" class="text-gray-400 hover:text-gray-600">×</button>
         `;
         
@@ -345,7 +362,7 @@ prediction = model.predict(new_data)
 
             toggleAuthModal();
         } catch (err) {
-            showToast("Auth Error: " + err.message);
+            showToast("Auth Error: " + formatErrorMessage(err));
         } finally {
             btn.disabled = false;
             btn.textContent = isSignUpMode ? "Sign Up" : "Log In";
@@ -354,7 +371,7 @@ prediction = model.predict(new_data)
 
     async function handleLogout() {
         const { error } = await supabaseClient.auth.signOut();
-        if (error) showToast("Error logging out: " + error.message);
+        if (error) showToast("Error logging out: " + formatErrorMessage(error));
         else showToast("Logged out successfully.", "success");
     }
 
@@ -428,9 +445,8 @@ prediction = model.predict(new_data)
             });
 
             if (!res.ok) {
-                const err = await res.json();
-                const errorMsg = typeof err.detail === 'string' ? err.detail : JSON.stringify(err.detail);
-                throw new Error(errorMsg || 'Payment initialization failed.');
+                const err = await res.json().catch(() => ({}));
+                throw new Error(formatErrorMessage(err));
             }
 
             const data = await res.json();
@@ -441,7 +457,7 @@ prediction = model.predict(new_data)
             }
 
         } catch (error) {
-            showToast('Payment Error: ' + error.message);
+            showToast('Payment Error: ' + formatErrorMessage(error));
             if (btn) {
                 btn.textContent = originalText;
                 btn.disabled = false;
@@ -506,7 +522,7 @@ prediction = model.predict(new_data)
             });
             document.getElementById('targetSection').classList.remove('hidden');
         } catch (err) {
-            showToast('Could not parse file headers: ' + err.message);
+            showToast('Could not parse file headers: ' + formatErrorMessage(err));
         }
     });
 
@@ -552,13 +568,13 @@ prediction = model.predict(new_data)
 
             if (!res.ok) {
                 const errData = await res.json().catch(() => ({}));
-                const errorDetail = errData.detail || 'Training failed.';
+                const formattedErr = formatErrorMessage(errData);
 
-                if (res.status === 402 || errorDetail.toLowerCase().includes('credits')) {
+                if (res.status === 402 || formattedErr.toLowerCase().includes('credits')) {
                     toggleOutOfCreditsModal();
                     return;
                 }
-                throw new Error(errorDetail || 'Training failed. Please check your dataset.');
+                throw new Error(formattedErr || 'Training failed. Please check your dataset.');
             }
 
             const data = await res.json();
@@ -620,7 +636,7 @@ prediction = model.predict(new_data)
             document.getElementById('resultSection').scrollIntoView({ behavior: 'smooth', block: 'start' });
 
         } catch (error) {
-            showToast(error.message);
+            showToast(formatErrorMessage(error));
         } finally {
             loadingStatus.classList.add('hidden');
             btn.disabled = false;
@@ -640,7 +656,7 @@ prediction = model.predict(new_data)
             document.querySelectorAll('.pred-input').forEach(input => {
                 const feat = input.getAttribute('data-feature');
                 let val = input.value;
-                if (!isNaN(val) && val.trim() !== '') {
+                if (val !== '' && !isNaN(val)) {
                     val = Number(val);
                 }
                 inputData[feat] = val;
@@ -650,42 +666,67 @@ prediction = model.predict(new_data)
             const res = await fetch(`${API_BASE_URL}/predict/${currentModelId}`, {
                 method: 'POST',
                 headers: headers,
-                body: JSON.stringify(inputData)
+                body: JSON.stringify({ data: [inputData] })
             });
 
             if (!res.ok) {
-                const errData = await res.json().catch(() => ({}));
-                throw new Error(errData.detail || 'Prediction failed. Please verify your input parameters.');
+                let errData = {};
+                try {
+                    errData = await res.json();
+                } catch (e) {
+                    errData = { detail: `Server error: ${res.status} ${res.statusText}` };
+                }
+
+                // If backend expects direct dict instead of { data: [...] }
+                if (res.status === 422) {
+                    const fallbackRes = await fetch(`${API_BASE_URL}/predict/${currentModelId}`, {
+                        method: 'POST',
+                        headers: headers,
+                        body: JSON.stringify(inputData)
+                    });
+                    if (fallbackRes.ok) {
+                        const fbData = await fallbackRes.json();
+                        return processPredictionResponse(fbData);
+                    }
+                }
+
+                throw new Error(formatErrorMessage(errData));
             }
 
             const data = await res.json();
-            
-            let predictionValue = "N/A";
-            if (data && data.prediction !== undefined) {
-                predictionValue = data.prediction;
-            } else if (data && data.result !== undefined) {
-                predictionValue = data.result;
-            } else if (typeof data === 'number' || typeof data === 'string') {
-                predictionValue = data;
-            }
-
-            if (typeof predictionValue === 'number') {
-                predictionValue = Number.isInteger(predictionValue) ? predictionValue : predictionValue.toFixed(4);
-            }
-
-            const outputContainer = document.getElementById('predictionOutput');
-            const resultDisplay = document.getElementById('predictionResult');
-            
-            resultDisplay.textContent = predictionValue;
-            outputContainer.classList.remove('hidden');
-            outputContainer.classList.add('flex');
+            processPredictionResponse(data);
 
         } catch (error) {
-            showToast(error.message);
+            showToast(formatErrorMessage(error));
         } finally {
             btn.innerHTML = `Run Prediction`;
             btn.disabled = false;
         }
+    }
+
+    function processPredictionResponse(data) {
+        let predictionValue = "N/A";
+        
+        if (data && data.predictions && Array.isArray(data.predictions)) {
+            predictionValue = data.predictions[0];
+        } else if (data && data.prediction !== undefined) {
+            predictionValue = data.prediction;
+        } else if (data && data.result !== undefined) {
+            predictionValue = data.result;
+        } else if (typeof data === 'number' || typeof data === 'string') {
+            predictionValue = data;
+        }
+
+        if (typeof predictionValue === 'number') {
+            predictionValue = Number.isInteger(predictionValue) ? predictionValue : predictionValue.toFixed(4);
+        }
+
+        const outputContainer = document.getElementById('predictionOutput');
+        const resultDisplay = document.getElementById('predictionResult');
+        
+        resultDisplay.textContent = predictionValue;
+        outputContainer.classList.remove('hidden');
+        outputContainer.classList.add('flex');
     }
     </script>
 </body>
