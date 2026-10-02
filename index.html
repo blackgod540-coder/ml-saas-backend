@@ -5,30 +5,25 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>No-Code ML Platform</title>
     <script src="https://cdn.tailwindcss.com"></script>
-    <!-- SheetJS via Cloudflare CDN -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 
+    <meta property="og:type" content="website">
+    <meta property="og:url" content="https://nocode-ai.netlify.app">
+    <meta property="og:title" content="No-Code Machine Learning Dashboard">
+    <meta property="og:description" content="Upload CSV datasets, train production-grade models in seconds, and export .joblib files with zero code.">
+    <meta property="og:image" content="https://nocode-ai.netlify.app/preview-banner.png">
 
-    <!-- Social Preview Meta Tags -->
-<meta property="og:type" content="website">
-<meta property="og:url" content="https://nocode-ai.netlify.app">
-<meta property="og:title" content="No-Code Machine Learning Dashboard">
-<meta property="og:description" content="Upload CSV datasets, train production-grade models in seconds, and export .joblib files with zero code.">
-<meta property="og:image" content="https://nocode-ai.netlify.app/preview-banner.png">
-
-<meta name="twitter:card" content="summary_large_image">
-<meta name="twitter:title" content="No-Code Machine Learning Dashboard">
-<meta name="twitter:description" content="Upload CSV datasets, train production-grade models in seconds, and export .joblib files with zero code.">
+    <meta name="twitter:card" content="summary_large_image">
+    <meta name="twitter:title" content="No-Code Machine Learning Dashboard">
+    <meta name="twitter:description" content="Upload CSV datasets, train production-grade models in seconds, and export .joblib files with zero code.">
 </head>
 <body class="bg-gray-50 min-h-screen p-6 font-sans">
     
-    <!-- Toast Notifications Container -->
     <div id="toastContainer" class="fixed top-4 right-4 z-[60] flex flex-col gap-2"></div>
 
     <div class="max-w-4xl mx-auto space-y-6">
         
-        <!-- Header -->
         <div class="bg-white p-6 rounded-2xl shadow-sm border border-gray-200 flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
             <div>
                 <h1 class="text-2xl font-extrabold text-gray-900 tracking-tight">No-Code ML Dashboard</h1>
@@ -36,7 +31,6 @@
             </div>
             
             <div id="authActions" class="flex items-center gap-3 w-full md:w-auto">
-                <!-- Logged In View -->
                 <div id="loggedInView" class="hidden flex-1 md:flex-none flex items-center justify-between md:justify-end gap-3 w-full">
                     <div class="bg-emerald-50 text-emerald-700 px-4 py-2 rounded-xl border border-emerald-100 text-center flex flex-col justify-center shadow-sm">
                         <span class="text-[10px] uppercase tracking-wider font-semibold opacity-80 leading-none mb-0.5">Credits</span>
@@ -57,14 +51,12 @@
                     </button>
                 </div>
 
-                <!-- Logged Out View -->
                 <button onclick="toggleAuthModal()" id="authBtn" class="w-full md:w-auto bg-gray-900 text-white font-medium py-2.5 px-6 rounded-xl hover:bg-gray-800 transition shadow-sm text-sm">
                     Log In / Sign Up
                 </button>
             </div>
         </div>
 
-        <!-- Auth Modal Overlay -->
         <div id="authModal" class="hidden fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 z-50 transition-opacity">
             <div class="bg-white p-8 rounded-2xl shadow-2xl max-w-sm w-full space-y-6">
                 <div class="text-center">
@@ -96,7 +88,6 @@
             </div>
         </div>
 
-        <!-- Out of Credits Modal -->
         <div id="outOfCreditsModal" class="hidden fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 z-50">
             <div class="bg-white p-8 rounded-2xl shadow-2xl max-w-sm w-full text-center space-y-5">
                 <div class="w-16 h-16 bg-amber-100 text-amber-600 rounded-full flex items-center justify-center mx-auto text-3xl font-bold mb-2 shadow-inner">⚡</div>
@@ -119,7 +110,6 @@
             </div>
         </div>
 
-        <!-- Step 1: Upload & Train -->
         <div class="bg-white p-6 rounded-2xl shadow-sm border border-gray-200">
             <h2 class="text-xl font-bold text-gray-900 mb-5 flex items-center gap-2">
                 <span class="bg-blue-100 text-blue-700 w-6 h-6 rounded-full flex items-center justify-center text-sm">1</span> 
@@ -132,7 +122,6 @@
                         <label class="block text-sm font-semibold text-gray-700">Select Dataset (CSV Only)</label>
                         <span class="text-xs font-semibold text-gray-400">Max file size: 100 MB</span>
                     </div>
-                    <!-- Restricted accept attribute to only .csv files -->
                     <input type="file" id="csvFile" accept=".csv" class="block w-full text-sm text-gray-500 file:mr-4 file:py-2.5 file:px-4 file:rounded-lg file:border-0 file:text-sm file:font-semibold file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100 cursor-pointer transition-colors"/>
                 </div>
                 
@@ -150,7 +139,6 @@
             </div>
         </div>
 
-        <!-- Training Spinner/Status Overlay -->
         <div id="loadingStatus" class="hidden bg-blue-50 border border-blue-200 p-8 rounded-2xl text-center space-y-4 shadow-inner">
             <div class="inline-block animate-spin rounded-full h-10 w-10 border-4 border-blue-600 border-t-transparent"></div>
             <div>
@@ -159,7 +147,6 @@
             </div>
         </div>
 
-        <!-- Step 2: Training Results & Export -->
         <div id="resultSection" class="hidden bg-white p-6 rounded-2xl shadow-sm border border-gray-200 space-y-6">
             <div class="flex justify-between items-center border-b border-gray-100 pb-4">
                 <h2 class="text-xl font-bold text-gray-900 flex items-center gap-2">
@@ -181,7 +168,6 @@
             </div>
         </div>
 
-        <!-- Step 3: In-Browser Prediction Playground -->
         <div id="playgroundSection" class="hidden bg-white p-6 rounded-2xl shadow-sm border border-gray-200 space-y-6"> 
             <h2 class="text-xl font-bold text-gray-900 border-b border-gray-100 pb-4 flex items-center gap-2">
                 <span class="bg-blue-100 text-blue-700 w-6 h-6 rounded-full flex items-center justify-center text-sm">3</span>
@@ -197,23 +183,22 @@
                 Run Prediction
             </button>
 
-            <!-- Prediction Result Callout -->
-            <div id="predictionOutput" class="hidden bg-emerald-50 border border-emerald-200 p-6 rounded-xl flex flex-col md:flex-row justify-between items-center shadow-inner gap-2">
+            <div id="predictionOutput" class="hidden bg-emerald-50 border border-emerald-200 p-6 rounded-xl flex-col md:flex-row justify-between items-center shadow-inner gap-2">
                 <span class="text-base font-bold text-emerald-800">Predicted Value:</span>
                 <span id="predictionResult" class="text-3xl font-black text-emerald-900 tracking-tight"></span>
             </div>
         </div>
-        <!-- Developer Code Integration Section -->
-<div class="bg-gray-900 text-white p-6 rounded-2xl shadow-lg border border-gray-800 space-y-4">
-    <div class="flex justify-between items-center border-b border-gray-800 pb-3">
-        <div>
-            <h3 class="text-lg font-bold">Deploy Your Exported Model in 3 Lines of Python</h3>
-            <p class="text-xs text-gray-400">Zero platform lock-in. Run predictions on your own server or AWS/Render backend.</p>
-        </div>
-        <span class="text-xs font-mono bg-blue-900/50 text-blue-300 px-3 py-1 rounded-full border border-blue-700/50">Python 3.9+</span>
-    </div>
+        
+        <div class="bg-gray-900 text-white p-6 rounded-2xl shadow-lg border border-gray-800 space-y-4">
+            <div class="flex justify-between items-center border-b border-gray-800 pb-3">
+                <div>
+                    <h3 class="text-lg font-bold">Deploy Your Exported Model in 3 Lines of Python</h3>
+                    <p class="text-xs text-gray-400">Zero platform lock-in. Run predictions on your own server or AWS/Render backend.</p>
+                </div>
+                <span class="text-xs font-mono bg-blue-900/50 text-blue-300 px-3 py-1 rounded-full border border-blue-700/50">Python 3.9+</span>
+            </div>
 
-    <pre class="bg-gray-950 p-4 rounded-xl text-xs md:text-sm font-mono text-emerald-400 overflow-x-auto leading-relaxed border border-gray-800">
+            <pre class="bg-gray-950 p-4 rounded-xl text-xs md:text-sm font-mono text-emerald-400 overflow-x-auto leading-relaxed border border-gray-800">
 <span class="text-purple-400">import</span> joblib
 <span class="text-purple-400">import</span> pandas <span class="text-purple-400">as</span> pd
 
@@ -225,7 +210,7 @@ new_data = pd.DataFrame([{<span class="text-amber-300">"age"</span>: <span class
 prediction = model.predict(new_data)
 
 <span class="text-purple-400">print</span>(<span class="text-amber-300">f"Predicted Result: {prediction[0]}"</span>)</pre>
-</div>
+        </div>
 
     </div>
 
@@ -238,13 +223,12 @@ prediction = model.predict(new_data)
     </footer>
 
     <script>
-    // Global Environment & File Size Configuration
     const API_BASE_URL = "https://ml-saas-backend.onrender.com";
     const API_KEY = "my_secret_test_key_123"; 
     const SUPABASE_URL = "https://vrirjtjhmpgydrhqpcib.supabase.co"; 
     const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InZyaXJqdGpobXBneWRyaHFwY2liIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODkwNjQ2NTYsImV4cCI6MjEwNDY0MDY1Nn0.20BIGwNSzIR8V_0igHUsBETs3m1YfWomPZcQ0ZcmF54";
 
-    const MAX_FILE_SIZE_MB = 100; // 100 MB
+    const MAX_FILE_SIZE_MB = 100; 
     const MAX_FILE_SIZE_BYTES = MAX_FILE_SIZE_MB * 1024 * 1024;
 
     const supabaseClient = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
@@ -253,8 +237,6 @@ prediction = model.predict(new_data)
     let modelFeatures = [];
     let currentUser = null;
     let isSignUpMode = false;
-
-    // --- UTILITIES ---
     
     function showToast(message, type = 'error') {
         const container = document.getElementById('toastContainer');
@@ -295,9 +277,6 @@ prediction = model.predict(new_data)
         return headers;
     }
 
-    // --- CORE LOGIC ---
-
-    // 1. Session Management & Auth Listeners
     window.addEventListener('DOMContentLoaded', async () => {
        const urlParams = new URLSearchParams(window.location.search);
        if (urlParams.has('trxref') || urlParams.has('reference')) {
@@ -320,7 +299,6 @@ prediction = model.predict(new_data)
         });
     });
 
-    // 2. Auth Modal & UI Helpers
     function toggleAuthModal() {
         const modal = document.getElementById('authModal');
         if (modal) modal.classList.toggle('hidden');
@@ -416,7 +394,6 @@ prediction = model.predict(new_data)
         }
     }
 
-    // 3. Payment Processing
     async function initiatePayment(paymentType) {
         if (!currentUser) {
             showToast("Please log in first to purchase credits.");
@@ -473,7 +450,6 @@ prediction = model.predict(new_data)
         }
     }
 
-    // 4. Dataset Processing & Model Training
     function resetDashboardState() {
         currentModelId = null;
         modelFeatures = [];
@@ -494,20 +470,18 @@ prediction = model.predict(new_data)
             return;
         }
 
-        // Real-World Safety Check: Validate max file size
         if (file.size > MAX_FILE_SIZE_BYTES) {
             showToast(`File size exceeds the ${MAX_FILE_SIZE_MB} MB limit. Please upload a smaller dataset.`);
-            e.target.value = ''; // Reset input
+            e.target.value = ''; 
             document.getElementById('targetSection').classList.add('hidden');
             return;
         }
 
         const filename = file.name.toLowerCase();
         
-        // Strict File Extension Check
         if (!filename.endsWith('.csv')) {
             showToast(`Only CSV files are allowed.`);
-            e.target.value = ''; // Reset input
+            e.target.value = ''; 
             document.getElementById('targetSection').classList.add('hidden');
             return;
         }
@@ -548,7 +522,6 @@ prediction = model.predict(new_data)
         
         if (!fileInput) return showToast("Please select a dataset file.");
         
-        // Final safety check prior to training
         if (!fileInput.name.toLowerCase().endsWith('.csv')) {
             return showToast("Only CSV files are permitted for training.");
         }
@@ -658,6 +631,8 @@ prediction = model.predict(new_data)
     async function runPrediction() {
         const btn = document.getElementById('predictBtn');
         try {
+            if (!currentModelId) throw new Error("No active model found. Please train a model first.");
+
             btn.innerHTML = `<span class="inline-block animate-spin rounded-full h-4 w-4 border-2 border-white border-t-transparent mr-2 align-middle"></span> Calculating...`;
             btn.disabled = true;
 
@@ -671,7 +646,39 @@ prediction = model.predict(new_data)
                 inputData[feat] = val;
             });
             
-            // ... (Rest of the prediction payload submission logic) ...
+            const headers = await getApiHeaders();
+            const res = await fetch(`${API_BASE_URL}/predict/${currentModelId}`, {
+                method: 'POST',
+                headers: headers,
+                body: JSON.stringify(inputData)
+            });
+
+            if (!res.ok) {
+                const errData = await res.json().catch(() => ({}));
+                throw new Error(errData.detail || 'Prediction failed. Please verify your input parameters.');
+            }
+
+            const data = await res.json();
+            
+            let predictionValue = "N/A";
+            if (data && data.prediction !== undefined) {
+                predictionValue = data.prediction;
+            } else if (data && data.result !== undefined) {
+                predictionValue = data.result;
+            } else if (typeof data === 'number' || typeof data === 'string') {
+                predictionValue = data;
+            }
+
+            if (typeof predictionValue === 'number') {
+                predictionValue = Number.isInteger(predictionValue) ? predictionValue : predictionValue.toFixed(4);
+            }
+
+            const outputContainer = document.getElementById('predictionOutput');
+            const resultDisplay = document.getElementById('predictionResult');
+            
+            resultDisplay.textContent = predictionValue;
+            outputContainer.classList.remove('hidden');
+            outputContainer.classList.add('flex');
 
         } catch (error) {
             showToast(error.message);
