@@ -162,9 +162,9 @@
             </div>
 
             <div class="pt-2">
-                <a id="downloadBtn" href="#" class="block w-full bg-gray-900 text-white text-center font-bold py-3 rounded-xl hover:bg-gray-800 transition shadow-md">
+                <button onclick="downloadModelFile(event)" id="downloadBtn" class="block w-full bg-gray-900 text-white text-center font-bold py-3 rounded-xl hover:bg-gray-800 transition shadow-md">
                     Download Model (.joblib)
-                </a>
+                </button>
             </div>
         </div>
 
@@ -560,7 +560,7 @@ prediction = model.predict(new_data)
 
             const headers = await getApiHeaders(true);
 
-            const res = await fetch(`${API_BASE_URL}/upload-and-train/?target_column=${targetCol}&user_id=${currentUser.id}`, {
+            const res = await fetch(`${API_BASE_URL}/upload-and-train/?target_column=${encodeURIComponent(targetCol)}&user_id=${encodeURIComponent(currentUser.id)}`, {
                 method: 'POST',
                 headers: headers,
                 body: formData
@@ -628,7 +628,6 @@ prediction = model.predict(new_data)
             });
             
             inputsContainer.innerHTML = formHtml;
-            document.getElementById('downloadBtn').href = `${API_BASE_URL}/download-model/${currentModelId}`;
             
             document.getElementById('resultSection').classList.remove('hidden');
             document.getElementById('playgroundSection').classList.remove('hidden');
@@ -641,6 +640,51 @@ prediction = model.predict(new_data)
             loadingStatus.classList.add('hidden');
             btn.disabled = false;
             btn.classList.remove('opacity-50', 'cursor-not-allowed');
+        }
+    }
+
+    async function downloadModelFile(e) {
+        if (e) e.preventDefault();
+        if (!currentModelId) {
+            showToast("No active model found to download.");
+            return;
+        }
+
+        const downloadBtn = document.getElementById('downloadBtn');
+        const originalText = downloadBtn.textContent;
+
+        try {
+            downloadBtn.disabled = true;
+            downloadBtn.textContent = "Downloading...";
+
+            const headers = await getApiHeaders();
+            const res = await fetch(`${API_BASE_URL}/download-model/${currentModelId}`, {
+                method: 'GET',
+                headers: headers
+            });
+
+            if (!res.ok) {
+                const errData = await res.json().catch(() => ({}));
+                throw new Error(formatErrorMessage(errData) || "Failed to download model.");
+            }
+
+            const blob = await res.blob();
+            const url = window.URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.style.display = 'none';
+            a.href = url;
+            a.download = `model_${currentModelId}.joblib`;
+            document.body.appendChild(a);
+            a.click();
+            window.URL.revokeObjectURL(url);
+            a.remove();
+
+            showToast("Model downloaded successfully!", "success");
+        } catch (error) {
+            showToast("Download Error: " + formatErrorMessage(error));
+        } finally {
+            downloadBtn.disabled = false;
+            downloadBtn.textContent = originalText;
         }
     }
 
@@ -664,6 +708,7 @@ prediction = model.predict(new_data)
             document.querySelectorAll('.pred-input').forEach(input => {
                 const feat = input.getAttribute('data-feature');
                 let val = input.value;
+                if (typeof val === 'string') val = val.trim();
                 if (val !== '' && !isNaN(val)) {
                     val = Number(val);
                 }
@@ -686,7 +731,7 @@ prediction = model.predict(new_data)
                 } catch (e) {
                     errData = { detail: `Backend Error: ${res.status} ${res.statusText}` };
                 }
-                // 3. This will now show the REAL error the model is throwing
+                // 3. Surface the exact error returned by the backend
                 throw new Error(formatErrorMessage(errData));
             }
 
