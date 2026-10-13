@@ -340,47 +340,22 @@ async def predict_model(model_id: str, payload: PredictionRequest):
             raise HTTPException(status_code=404, detail="Model not found or expired in cloud storage.")
 
     try:
-        artifacts = joblib.load(model_path)
-        model = artifacts["model"]
-        model_type = artifacts["model_type"]
-        features = artifacts["features"]
-        label_encoders = artifacts["label_encoders"]
-        feature_defaults = artifacts["feature_defaults"]
-        target_column = artifacts["target_column"]
-
-        input_df = pd.DataFrame([payload.input_data])
-
-        # Preprocess input matching MLEngine's encoding standards
-        for col in features:
-            if col not in input_df.columns:
-                input_df[col] = feature_defaults.get(col, 0)
-            
-            if col in label_encoders:
-                le = label_encoders[col]
-                val = str(input_df[col].iloc[0])
-                if val in le.classes_:
-                    input_df[col] = le.transform([val])[0]
-                else:
-                    # Fallback to default class index if unseen category appears
-                    input_df[col] = le.transform([le.classes_[0]])[0]
-            else:
-                input_df[col] = pd.to_numeric(input_df[col], errors='coerce').fillna(feature_defaults.get(col, 0.0))
-
-        input_df = input_df[features]
-        prediction = model.predict(input_df)[0]
+        # 1. Load the sklearn Pipeline object directly
+        pipeline = joblib.load(model_path)
         
-        # Inverse transform encoded classification target back to string labels if applicable
-        if model_type == "classification" and target_column in label_encoders:
-            target_le = label_encoders[target_column]
-            prediction = target_le.inverse_transform([int(prediction)])[0]
-        elif isinstance(prediction, (np.integer, np.floating)):
+        # 2. Convert incoming payload dictionary to a pandas DataFrame
+        input_df = pd.DataFrame([payload.input_data])
+        
+        # 3. Predict natively using the pipeline (handles imputation & encoding automatically)
+        prediction = pipeline.predict(input_df)[0]
+        
+        if isinstance(prediction, (np.integer, np.floating)):
             prediction = prediction.item()
             
         return {"prediction": prediction}
     except Exception as e:
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
-
 @app.get("/download-model/{model_id}")
 async def download_model(model_id: str):
     model_path = os.path.join(MODELS_DIR, f"{model_id}.joblib")
